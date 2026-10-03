@@ -10,7 +10,7 @@ It started out as a part of foodie-rs, but quickly became big enough to be a sep
 
 ### Running Forkulous
 
-Forkulous requires two things to run: The USDA FoodData Central dataset, in a JSON format that Forkulous likes, and the models for searching the FoodBase database.
+Forkulous requires two things to run: The USDA FoodData Central dataset, in a JSON format that Forkulous likes, and the transformer models for searching it.
 
 1. Download the [FoodDataCentral](https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_csv_2026-04-30.zip) dataset.
 2. Convert the dataset using [this script](https://codeberg.org/Foodie-RS/forkulous/src/branch/main/src/scripts/generate_foodbase_json.py) (**NOTE:** This script currently uses a database connection. There is no reason it can't work from the CSV file, I just haven't found the time to change the script, but it should be fairly easy)
