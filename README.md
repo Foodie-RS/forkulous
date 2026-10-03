@@ -4,7 +4,7 @@
 
 ### What is Forkulous?
 
-Forkulous is a free-as-in-freedom, fully local, self-hostable API for turning unstructured recipe ingredient text into nutritional information, using only local data from USDA FoodData Central and ingredient-parser-nlp, as well as various transformers for heuristic nutrient calculation. Though its main feature and endpoint is `/search`, which mainly gives nutrient information, there will also be features for food ontology (such as whether a food is derived from animals, a vegetable, etc.) in the future.
+Forkulous is a free-as-in-freedom, self-hostable API for turning unstructured recipe ingredient text into nutritional information, using only local data from USDA FoodData Central and ingredient-parser-nlp, as well as various transformers for heuristic nutrient calculation. Though its main feature and endpoint is `/search`, which mainly gives nutrient information, there will also be features for food ontology (such as whether a food is derived from animals, a vegetable, etc.) in the future.
 
 It started out as a part of foodie-rs, but quickly became big enough to be a separate application. Foodie-RS is a (as of yet unreleased) rust-based meal planner that uses an evolutionary algorithm for finding weekly meal plans. Similar to services such as EatThisMuch, only FOSS and written in Rust.
 
