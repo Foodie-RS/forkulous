@@ -1,0 +1,13 @@
+.env
+.env.production
+.env.dev
+venv/**/*
+**/.DS_STORE
+**/foodon.owl
+**/__pycache__
+datasets/**
+models/**
+index/**
+**/*.csv
+**/*.dat
+src/**/*.json
