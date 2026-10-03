@@ -1,4 +1,4 @@
-# Forkulous 🍴✨
+# Forkulous 🍴✨ [^1]
 
 > ***WARNING:*** Forkulous is very much a work-in-progress. It is not production-ready by any means. Expect breaking changes, edge cases and missing features/data.
 
@@ -24,7 +24,7 @@ python -m api.rest_api
 7. Wait for the API to start, then head to https://localhost:12345/docs to test it out!
 8. Profit!
 
-### A note on architecture
+### A few notes on the architecture
 Turning meatsack-produced recipes into information that a computer can understand is hard. The logic for it can be overly complex, redundant and confusing. That's why Forkulous is based on a **lazily executed pull-based pipeline**. This means:
 - Functions/classes that can provide something (Forkulous calls them `Provider`s) need to be registered so that the pipeline knows to use them.
 - The pipeline stores all data that has been fetched/generated during every request in a single object called `RequestState`. Notably, it also stores all `Provider`s, which MIGHT produce data in the future.
@@ -39,7 +39,7 @@ search_res = state.get(SearchResult) # Fetch the result. This causes the `Provid
 ```
 Doing it like this has many advantages, but also some disadvantages:
 - All `Provider`s are isolated from each other, making it easy to test and debug them.
-- Forkulous is extremely extensible and can easily be changed to use different data sources.
+- Forkulous is extremely extensible and can easily be changed to use different data sources. You don't even need to modify the codebase at all!
 - Only code that needs to run is actually executed, speeding up the request.
 - `Provider`s cannot have side effects. That means that for the same state object, it should ALWAYS return the same result. 
 - Stacktraces are often very long, because of all the nested execution.
@@ -50,6 +50,13 @@ Doing it like this has many advantages, but also some disadvantages:
 ### AI
 Forkulous, like Foodie-RS, is a human-based project. I consider programming an art, as much as a craft. I don't intend to use AI for most of the project. However, I did use AI on a number of occasions: to explain to me concepts that I am unfamiliar with, or to give me snippets for things that I need. Most notably, the dataset for training the semantic search of the ingredient database has been created almost entirely by an LLM, as I simply cannot annotate 10,000 tuples by myself.
 
-I don't have a clear opinion on AI, but I know that I don't want Foodie-RS to be an AI project. I want to overcome challenges, experience the wonder of learning things I didn't know before, create something just the way I wanted it, and (hopefully) to share my creation with others and see what they make with it in turn.
+I don't have a clear opinion on AI, but I know that I don't want Foodie-RS to be an AI project. I want to overcome challenges, experience the wonder of learning things I didn't know before, create something just the way I wanted it, and (hopefully) to share my creation with others and see what they make with it in turn. That is what gives this project any meaning at all to me.
 
 That is all.
+
+### Supporting Forkulous
+Like most developers of FOSS projects, I have invested a tremendous amount of my free time and energy into this project (and Foodie-RS). If Forkulous has helped you and you want to support it, I have a [Ko-Fi page](https://ko-fi.com/juliag2)!
+
+If you want to support Forkulous by contributing, you are more than welcome to do so! Just fork (hehe) this repository, make your changes and create a pull request!
+
+[^1]:Pronounced fork-you-luss
