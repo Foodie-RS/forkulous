@@ -7,15 +7,15 @@ from sentence_transformers import SentenceTransformer
 
 from api.common import Option
 from api.models import (
-    S3_AggrDict_Res,
-    S4_DictFilter_Res,
     FallbackUnitCandidate,
     ParserState,
+    S3_AggrDict_Res,
+    S4_DictFilter_Res,
+    S5_SelectUnits_Res,
     S6_SemanticPrep_Res,
     TransientUnitSelectionResult,
     UnitCandidate,
     UnitDictResult,
-    S5_SelectUnits_Res,
 )
 from api.state import OptionalProvider, Provider, RequestState
 

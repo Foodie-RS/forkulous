@@ -1,7 +1,7 @@
 {
   "executionEnvironments": [
     {
-      "root": "python"
+      "root": "src"
     }
   ],
   "reportExplicitAny": false

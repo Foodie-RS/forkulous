@@ -13,9 +13,28 @@ from api.common import Option
 
 @dataclass
 class Provider[T](metaclass=abc.ABCMeta):
+    """
+    A Provider is an object that can *provide* something.
+    Providers are the backbone of Forkulous: everything is
+    produced by a Provider.
+
+    To create a new Provider, simply create a class that
+    inherits from Provider, set the _type and override the
+    .execute() method. Then register the new Provider on the
+    in the main API.
+
+    It's very important that Providers respect typing.
+    In particular, a Provider should never return None.
+    If you need to return a None value, use OptionalProvider
+    and Option.none() instead.
+    """
     _type: type[T]
 
     def deferred(self) -> bool:
+        """
+        This method should return True if it depends on the result
+        of other Providers of the same type.
+        """
         return False
 
     def provides(self, what: type) -> bool:
@@ -23,13 +42,25 @@ class Provider[T](metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def execute(self, state: RequestState) -> T:
-        pass
+        """
+        This method should always return a value (or raise an error).
+        It's very important that typing is respected. This method should
+        never return an object that is not an instance or a subclass of T.
+
+        If you need to return a None value, use OptionalProvider and
+        Option.none() instead.
+        """
 
     def __call__(self, state: RequestState) -> T:
         return self.execute(state)
 
 
 class OptionalProvider[T](Provider[Option[T]], metaclass=abc.ABCMeta):
+    """
+    A version of Provider that can return a wrapped
+    None value, using Option.none(). If you return a
+    not-None value, use Option.some(value) to wrap it.
+    """
     @override
     def provides(self, what:type) -> bool:
         return Option[what] == self._type
@@ -47,6 +78,11 @@ _NULL = _Null()
 
 @dataclass
 class _StorePromise[T]:
+    """
+    A wrapper object for a Provider that may or may not have
+    been called. Use .get() to either get the cached result,
+    or to execute the provider and cache the result.
+    """
     _provider: Provider[T] | OptionalProvider[T] | None = None
     _state_map:weakref.WeakKeyDictionary[RequestState, Option[T]] = field(default_factory=weakref.WeakKeyDictionary)
 

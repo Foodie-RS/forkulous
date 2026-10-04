@@ -1,11 +1,10 @@
 import logging
-from typing import Any, NamedTuple, override
+from typing import Any, override
 
-import numpy as np
 from pint import UnitRegistry
 
 from api.common import Option
-from api.models import S3_AggrDict_Res, Density, UnitCandidate, UnitDictResult
+from api.models import Density, UnitCandidate, UnitDictResult
 from api.state import OptionalProvider, Provider, RequestState
 
 GOOD_VOLUME_UNITS = {"cup", "cups", "cubic inch", "cubic inches", "quart", "quarts", "pint", "pints", "ml", "milliliter", "milliliters", "l", "liter", "liters"}

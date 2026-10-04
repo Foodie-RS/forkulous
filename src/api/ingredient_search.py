@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import csv
 import json
 import logging
@@ -13,42 +12,59 @@ from ingredient_parser import UREG
 from ingredient_parser.dataclasses import (
     ParsedIngredient,
 )
-from pint.facets.numpy import unit
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from usearch.index import Index
 
 from api.common import Option
-from api.models import S3_AggrDict_Res, S4_DictFilter_Res, EmptyUnitResult, FallbackUnitCandidate, NutriSearchResult, Nutris, ParseResults, ProviderSearchResult, SearchParams, SearchRequest, SearchResponse, SearchResult, S6_SemanticPrep_Res, ShortParseResult, UnitDictResult, S1_UnitNames_Res, S5_SelectUnits_Res
+from api.models import (
+    EmptyUnitResult,
+    FallbackUnitCandidate,
+    Nutris,
+    NutriSearchResult,
+    ParseResults,
+    ProviderSearchResult,
+    S1_UnitNames_Res,
+    S3_AggrDict_Res,
+    S4_DictFilter_Res,
+    S5_SelectUnits_Res,
+    S6_SemanticPrep_Res,
+    SearchParams,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    ShortParseResult,
+    UnitDictResult,
+)
 from api.providers.density import Density, FallbackDensityProvider, UnitDensityProvider
+from api.providers.fdc_ingredient import (
+    LocalFDCIngredientProvider,
+    LocalFDCNutriProvider,
+)
 from api.providers.fdc_units import (
     FDCEmptyUnitProv,
     FDCFbUnitProv,
     FDCUnitNamesProv,
     LocalFDCUnitDictProv,
 )
-from api.providers.ingredient_provider import (
-    LocalFDCIngredientProvider,
-    LocalFDCNutriProvider,
+from api.providers.ingredient_search import (
+    IngredientSearchProvider,
 )
 from api.providers.parsing import (
     ParseResultProvider,
     ParserProvider,
     ShortParseResultProvider,
 )
-from api.providers.search import (
-    IngredientSearchProvider,
-)
-from api.providers.unit import (
-    S5_SelectUnits_Prov,
-    S6_SemanticPrep_Prov,
-    S3_AggrDict_Prov,
-    S4_DictFilter_Prov,
-)
-from api.state import Provider, RequestState
-from api.units import (
+from api.providers.pint_unit import (
     PintUnitNamesProvider,
     PintUnitProvider,
 )
+from api.providers.unit_aggregation import (
+    S3_AggrDict_Prov,
+    S4_DictFilter_Prov,
+    S5_SelectUnits_Prov,
+    S6_SemanticPrep_Prov,
+)
+from api.state import Provider, RequestState
 
 BE_DEF_Q_PROMPT = "ingredient: "
 BE_DEF_D_PROMPT = "usda: "

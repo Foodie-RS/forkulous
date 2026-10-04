@@ -47,11 +47,11 @@ class UnitRegressionPipeline:
     def predict_many(self,food:list[str], unit:list[str]|None, comments:list[list[str]|None]) -> np.ndarray:
         if unit is None and self.use_unit_input:
             raise RuntimeError("Can't do inference without unit if use_unit_input is true")
-        prompts = []
+        prompts:list[str] = []
         for i, fd in enumerate(food):
             comment = comments[i]
             if self.use_unit_input:
-                un = unit[i]
+                un:str = unit[i]
                 prompts.append(self.prompt.format(
                     food=fd,
                     unit=un,

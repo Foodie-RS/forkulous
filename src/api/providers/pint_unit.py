@@ -10,8 +10,8 @@ from api.models import (
     Density,
     ParserState,
     PintUnitCandidate,
-    UnitDictResult,
     S1_UnitNames_Res,
+    UnitDictResult,
 )
 from api.state import Provider, RequestState
 

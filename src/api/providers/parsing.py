@@ -15,12 +15,12 @@ from api.models import (
     NameModel,
     ParseResults,
     ParserState,
+    S1_UnitNames_Res,
+    S5_SelectUnits_Res,
     SearchRequest,
     SearchResult,
     ShortParseResult,
     UnitModel,
-    S1_UnitNames_Res,
-    S5_SelectUnits_Res,
 )
 from api.state import Provider, RequestState
 

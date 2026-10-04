@@ -1,41 +1,27 @@
 import logging
 from dataclasses import dataclass
-from itertools import chain
-from typing import Any, Callable, cast, override
+from typing import Any, cast, override
 
-import numpy as np
-from psycopg.rows import namedtuple_row
 from sentence_transformers import SentenceTransformer
-from typing_extensions import Generator
 
-from api import providers
 from api.common import Option
-from api.models import EmptyUnitResult, FallbackUnitCandidate, IngredientUnitCandidate, ParserState, UnitCandidate, UnitDictResult, S1_UnitNames_Res
-from api.providers.ingredient_provider import FDCCandidates
+from api.models import (
+    EmptyUnitResult,
+    FallbackUnitCandidate,
+    IngredientUnitCandidate,
+    ParserState,
+    S1_UnitNames_Res,
+    UnitCandidate,
+    UnitDictResult,
+)
+from api.providers.fdc_ingredient import FDCCandidates
+from api.providers import unit_aggregation
 from api.state import OptionalProvider, Provider, RequestState
 
 SERVING_MEASURE_UNITS = [1036,1049,1059,1069,1071,1096]
 ITEM_MEASURE_UNITS = list(range(1013,1030)) + list(range(1031, 1038)) + list(range(1039,1049)) + list(range(1050,1059)) + [1060] + list(range(1063,1069)) + [1070] + list(range(1072,1121))
 ITEM_NAMES=["fruit", "piece", ""]
 
-def _match_confidence_empty_unit(unit:IngredientUnitCandidate) -> int:
-    conf = 4
-    if unit.measure_unit_id==9999:
-        if unit.unit_name in ["serving","servings", "each"]:
-            conf = 1
-        elif unit.unit_name in ITEM_NAMES:
-            conf= 2
-        else:
-            conf=3
-    elif unit.measure_unit_id in SERVING_MEASURE_UNITS:
-        conf= 1
-    elif unit.measure_unit_id in ITEM_MEASURE_UNITS:
-        conf= 2
-    else:
-        conf= 4
-    if not (len(unit.comments) == 0 or len("".join(unit.comments).strip()) == 0):
-        conf+=1
-    return conf
 def _cmp(items:list[tuple[Any, Any, bool]]):
     """
       Convenience method to compare multiple attributes of two arbitrary objects.
@@ -149,7 +135,7 @@ def _get_default(unit_ranker:SentenceTransformer, crps:dict[str, list[dict[Any, 
             ))
     logger.debug("No units, looking up `serving`")
     #TODO maybe generalize this more? "serving" may be too narrow?
-    res = providers.unit.find_unit_in_dict(state, "serving", unit_ranker)
+    res = unit_aggregation.find_unit_in_dict(state, "serving", unit_ranker)
     if len(res) == 0:
         logger.debug("No `serving` found.")
         return Option.none()

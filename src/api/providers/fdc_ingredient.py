@@ -67,7 +67,7 @@ class LocalFDCIngredientProvider(IngredientProvider):
 
 @dataclass
 class LocalFDCNutriProvider(NutriProvider):
-    nutris:dict[int, Nutris]
+    nutris:dict[str, Nutris]
 
     @override
     def execute(self, state: RequestState) -> Option[NutriSearchResult]:
