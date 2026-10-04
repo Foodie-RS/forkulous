@@ -1,4 +1,4 @@
-# Forkulous 🍴✨ [^1]
+# Forkulous 🍴🌈 [^1]
 
 > ***WARNING:*** Forkulous is very much a work-in-progress. It is not production-ready by any means. Expect breaking changes, edge cases and missing features/data.
 
