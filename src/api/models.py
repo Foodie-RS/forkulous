@@ -51,7 +51,7 @@ class SearchParams(BaseModel):
     max_results_be:int=150
     max_results:int=3
     exact:bool=True
-    parse:bool=False
+    parse:bool=True
     semantic_cutoff:float=0.1
 
     def arg_or_default(self,args:dict[str, str|bool]) -> SearchParams:

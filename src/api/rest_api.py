@@ -14,16 +14,15 @@ from api.models import SearchRequest
 async def lifespan(app: FastAPI):
     load_dotenv()
     ing_api = ingredient_search.load2(
-        be_model="./models/be-freetext-usda-v2/",
-        ce_model="./models/ce-ettin-freetext2usda_large_v2/",
-        index_file="./index/foodbase-embeddings.dat",
-        corpus_file_csv="./all-foodbase-descriptions.csv",
-        nutri_file="./fdc_nutris.json",
-        portion_file="./fdc_portions.json",
+        be_model="Forkulous/be-forkulous",
+        ce_model="Forkulous/ce-forkulous-large",
+        index_file="../data/foodbase-embeddings.dat",
+        corpus_file_csv="../data/all-foodbase-descriptions.csv",
+        nutri_file="../data/fdc_nutris.json",
+        portion_file="../data/fdc_portions.json",
         id_column="fdc_id",
         corpus_doc_column="description",
         unit_ranker="sentence-transformers/all-MiniLM-L6-v2",
-        conninfo=os.environ["DATABASE_URL"]
     )
     app.state.api = ing_api
     yield
@@ -43,5 +42,5 @@ async def search(request:Request, search_req:SearchRequest):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING)
     logger = logging.getLogger("ingr_api")
-    logger.setLevel(level=5)
+    logger.setLevel(level=logging.DEBUG)
     uvicorn.run(app, host="0.0.0.0", port=12345)

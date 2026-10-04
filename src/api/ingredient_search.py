@@ -129,7 +129,7 @@ def _gen_index(corpus:dict[int,str], model:SentenceTransformer) -> Index:
     index.add([key for key,_ in items], corpus_embd)
     return index
 
-def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranker:str|SentenceTransformer, corpus:dict[int,str], index_file,nutris_file, portions_file, conninfo, kwargs) -> SearchAPI:
+def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranker:str|SentenceTransformer, corpus:dict[int,str], index_file,nutris_file, portions_file, kwargs) -> SearchAPI:
     logger = logging.getLogger("ingr_api")
     #FIXME clean up signature of load() methods
     model_be:SentenceTransformer
@@ -215,7 +215,7 @@ def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
 
     return SearchAPI(providers=providers,def_search_params=def_search_params, unit_ranker=model_units)
 
-def load2(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranker:str|SentenceTransformer, conninfo,index_file, nutri_file, portion_file,corpus_file_csv, id_column:str="id",def_search_params:SearchParams|None=None, **kwargs) -> SearchAPI:
+def load2(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranker:str|SentenceTransformer, index_file, nutri_file, portion_file,corpus_file_csv, id_column:str="id",def_search_params:SearchParams|None=None, **kwargs) -> SearchAPI:
     if not (os.path.isfile(corpus_file_csv) and os.path.exists(corpus_file_csv)):
         raise FileNotFoundError(corpus_file_csv)
     with open(corpus_file_csv, "r") as f:
@@ -224,22 +224,4 @@ def load2(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
         dr = csv.DictReader(f)
         for row in dr:
             corpus[int(row[id_column])] = row[desc_col]
-    return _load(be_model, ce_model, unit_ranker, corpus, index_file, nutri_file, portion_file, conninfo, kwargs=kwargs)
-def load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranker:str|SentenceTransformer, conninfo,index_file, nutri_file, portion_file, corpus_file_csv, target_corpus_file,def_search_params:SearchParams|None=None, **kwargs) -> SearchAPI:
-    if os.path.exists(target_corpus_file):
-        with open(target_corpus_file, "r") as f:
-            corpus = json.load(f)
-    else:
-        if not os.path.exists(corpus_file_csv):
-            raise FileNotFoundError(corpus_file_csv)
-        corpus = {}
-        cnt = 0
-        with open(corpus_file_csv, "r") as f:
-            desc_col = kwargs.get("corpus_doc_column", "description")
-            dr = csv.DictReader(f)
-            for row in dr:
-                corpus[cnt] = row[desc_col]
-                cnt+=1
-        with open(target_corpus_file, "w") as f:
-            json.dump(corpus, f)
-    return _load(be_model,ce_model, unit_ranker, corpus, index_file, nutri_file, portion_file, conninfo, kwargs=kwargs)
+    return _load(be_model, ce_model, unit_ranker, corpus, index_file, nutri_file, portion_file, kwargs=kwargs)

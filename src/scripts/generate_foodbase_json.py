@@ -1,23 +1,52 @@
-import csv
-from functools import reduce
-from multiprocessing.dummy import Lock, Pool as ThreadPool
+from __future__ import annotations
+
+import math
+
 import json
-import os
-from typing import NamedTuple
+from functools import reduce
+from multiprocessing.dummy import Pool as ThreadPool
+from typing import Any, NamedTuple
 
-from dotenv import load_dotenv
-from psycopg.rows import namedtuple_row
-import psycopg_pool
+import pandas
+from pandas.core.generic import DtypeArg
+from pydantic import BaseModel
 import regex
-from sentence_transformers import CrossEncoder, SentenceTransformer
-from usearch.index import Index
-import sys
 
-from api.providers.search import Nutris
-sys.path.append(".")
 
-from api import ingredient_provider, units
+class Nutris(BaseModel):
+    energy:float|None=None
+    carbs:float|None=None
+    fat:float|None=None
+    protein:float|None=None
+    salt:float|None=None
+    sat_fat:float|None=None
+    sugar:float|None=None
+    fiber:float|None=None
+    calculated:list[str]|None=None
 
+    def toJSON(self):
+        return json.dumps(self.to_dict())
+
+    def to_dict(self) -> dict[str, float|None|list[str]]:
+        nutris:dict[str, Any]={k:v for k,v in [("energy", self.energy), ("carbs", self.carbs), ("fat", self.fat), ("protein", self.protein), ("salt", self.salt), ("sugar", self.sugar), ("fiber", self.fiber), ("satfat", self.sat_fat)]}
+        if self.calculated is not None and len(self.calculated) > 0:
+            nutris["calculated"] = self.calculated
+        else:
+            nutris["calculated"] = None
+        return nutris
+
+    def multiply(self, factor:float) -> Nutris:
+        return Nutris (
+            energy=None if self.energy is None else self.energy * factor,
+            carbs=None if self.carbs is None else self.carbs * factor,
+            fat=None if self.fat is None else self.fat * factor,
+            protein=None if self.protein is None else self.protein * factor,
+            salt=None if self.salt is None else self.salt * factor,
+            sugar=None if self.sugar is None else self.sugar * factor,
+            fiber=None if self.fiber is None else self.fiber * factor,
+            sat_fat=None if self.sat_fat is None else self.sat_fat * factor,
+            calculated=self.calculated
+        )
 KCAL_TO_KJ_CNST = 4.184
 
 
@@ -115,9 +144,9 @@ def _resolve_unit_name(unit_name:str,unit_info_1:str,unit_info_2:str) -> _NameCa
             return _NameCandidate(new_unit.strip(), c, modifier, amount, 3)
     return _NameCandidate(None, [x.strip() for x in [unit_name, unit_info_1, unit_info_2] if len(x.strip()) > 0], modifier, None, 4)
 
-def _unit_candidate(row, ing_cand):
-    unit_amount = row.amount
-    unit_name, _unit_comments, modifier, unit_amount_2,parser_confidence = _resolve_unit_name(row.unit_name, row.unit_info_1, row.unit_info_2)
+def _unit_candidate(row):
+    unit_amount = 1.0 if math.isnan(row["amount"]) else row["amount"]
+    unit_name, _unit_comments, modifier, unit_amount_2,parser_confidence = _resolve_unit_name(str(row["name"] or ""), str(row["portion_description"] or ""), str(row["modifier"] or ""))
     singular_name = unit_name
     if unit_amount is None:
         unit_amount = unit_amount_2 if unit_amount_2 is not None else 1
@@ -140,85 +169,86 @@ def _unit_candidate(row, ing_cand):
                 continue
             g1 = rx_res.captures(1)
             comments_sane.extend([it for it in g1 if len(it) > 0])
-    return units.IngredientUnitCandidate(ingredient_candidate=ing_cand, modifier=modifier, entry_id=row.entry_id, unit_name=unit_name, comments=comments_sane, singular_name=singular_name, plural_name=plural_u_name, gram_weight=gram_weight, seq_num=row.seq_num if row.seq_num is not None else 1, measure_unit_id=row.measure_unit_id, source=f"f_{row.fdc_id}")
+    return {
+            "unit_name": unit_name,
+            "singular_name": singular_name,
+            "plural_name": plural_u_name,
+            "comments": comments_sane,
+            "gram_weight": gram_weight,
+            "entry_id": row["id_portion"],
+            "measure_unit_id": row["id_measure"],
+            "seq_num": int(row["seq_num"]) if row.seq_num.is_integer() else 1,
+            "modifier":modifier,
+            "source": f"f_{row["fdc_id"]}",
+        }
 
-def get_nutris(self, id: str, db_pool:psycopg_pool.ConnectionPool) -> Nutris:
-    with db_pool.connection() as conn, conn.cursor(row_factory=namedtuple_row) as curr:
-        rows = curr.execute("SELECT nutrient_id, amount FROM ingredients_new.food_nutrient WHERE fdc_id=%s AND nutrient_id=ANY(%s)", [int(id), RELEVANT_NUTRIS])
-        nutris = Nutris(energy=None, carbs=None, protein=None, fat=None, sat_fat=None, sugar=None, salt=None, fiber=None, calculated=[])
-        for row in rows:
-            nid = row.nutrient_id
-            amnt = max(row.amount,0)
-            if nid in FDC_ENERGY_IDS and nutris.energy is None:
-                if nid != 1062:
-                    amnt *= KCAL_TO_KJ_CNST
-                nutris.energy = amnt
-            if nid in FDC_CARB_IDS and nutris.carbs is None:
-                nutris.carbs = amnt
-            if nid in FDC_FAT_IDS and nutris.fat is None:
-                nutris.fat = amnt
-            if nid in FDC_PROTEIN_IDS and nutris.protein is None:
-                nutris.protein = amnt
-            if nid in FDC_SUGAR_IDS and nutris.sugar is None:
-                nutris.sugar = amnt
-            if nid in FDC_FIBER_IDS and nutris.fiber is None:
-                nutris.fiber = amnt
-            if nid in FDC_SALT_IDS and nutris.salt is None:
-                nutris.salt = amnt
-            if nid in FDC_SODIUM_IDS and nutris.salt is None:
-                nutris.salt = amnt * 2.5
-        _fill_nutris(nutris)
-        return nutris
+def get_nutris(id: str) -> Nutris:
+    rows = df_nutris.loc[df_nutris.fdc_id==id].iterrows()
+    nutris = Nutris(energy=None, carbs=None, protein=None, fat=None, sat_fat=None, sugar=None, salt=None, fiber=None, calculated=[])
+    for _,row in rows:
+        nid = row.nutrient_id
+        amnt = max(row.amount,0)
+        if nid in FDC_ENERGY_IDS and nutris.energy is None:
+            if nid != 1062:
+                amnt *= KCAL_TO_KJ_CNST
+            nutris.energy = amnt
+        if nid in FDC_CARB_IDS and nutris.carbs is None:
+            nutris.carbs = amnt
+        if nid in FDC_FAT_IDS and nutris.fat is None:
+            nutris.fat = amnt
+        if nid in FDC_PROTEIN_IDS and nutris.protein is None:
+            nutris.protein = amnt
+        if nid in FDC_SUGAR_IDS and nutris.sugar is None:
+            nutris.sugar = amnt
+        if nid in FDC_FIBER_IDS and nutris.fiber is None:
+            nutris.fiber = amnt
+        if nid in FDC_SALT_IDS and nutris.salt is None:
+            nutris.salt = amnt
+        if nid in FDC_SODIUM_IDS and nutris.salt is None:
+            nutris.salt = amnt * 2.5
+    _fill_nutris(nutris)
+    return nutris
 cnt = 0
-def run_it(id):
+def run_it(id:str):
     global cnt
     if cnt % 100 == 0:
         print(f"Processed {cnt}")
-    nutris = get_nutris(id, db_pool)
-    with db_pool.connection() as conn, conn.cursor(row_factory=namedtuple_row) as curr:
-        portions = curr.execute("SELECT * FROM ingredients_new.food_portions_names WHERE fdc_id=%s", [id]).fetchall()
-        units_new = []
-        for row in portions:
-            pass
-            unit_cand = _unit_candidate(row, None)
-            units_new.append({
-                "unit_name": unit_cand.unit_name,
-                "singular_name": unit_cand.singular_name,
-                "plural_name": unit_cand.plural_name,
-                "comments": unit_cand.comments,
-                "gram_weight": unit_cand.gram_weight,
-                "entry_id": unit_cand.entry_id,
-                "measure_unit_id": unit_cand.measure_unit_id,
-                "seq_num": unit_cand.seq_num,
-                "modifier":unit_cand.modifier,
-                "source": unit_cand.source,
-            })
-        cnt += 1
-        return id, nutris.to_dict(), units_new
+    nutris = get_nutris(id)
+    rows = df_portion_names[df_portion_names.fdc_id==id].iterrows()
+    units_new = []
+    for _,row in rows:
+        unit_cand = _unit_candidate(row)
+        units_new.append(unit_cand)
+    cnt += 1
+    return id, nutris.to_dict(), units_new
 
 if __name__ == '__main__':
     nutris_json = {}
     portions_json = {}
+    str_cols = ["portion_description","modifier","data_points","footnote","min_year_acquired","data_points","derivation_id","min","max","median","loq","footnote","min_year_acquired","percent_daily_value","data_type","description","publication_date","name"]
+    int_cols = ["id", "fdc_id", "measure_unit_id", "seq_num", "nutrient_id", "id_measure", "id_portion"]
+    dtype:DtypeArg = {x:y for x,y in ([(k,"object") for k in str_cols] + [(k,"Int64") for k in int_cols])}
+    df_nutris = pandas.read_csv("./data/food_nutrient.csv", dtype=dtype).fillna(None)
+    df_portion = pandas.read_csv("./data/food_portion.csv",dtype=dtype).fillna(None)
+    df_measure = pandas.read_csv("./data/measure_unit.csv", dtype=dtype).fillna(None)
+    df_food = pandas.read_csv("./data/food.csv",dtype=dtype).fillna(None)
+    df_food_fltr:pandas.DataFrame = df_food[(df_food.data_type == "foundation_food") | (df_food.data_type == "sr_legacy_food") | (df_food.data_type == "survey_fndds_food")]
 
-    load_dotenv()
-    db_url = os.environ["DATABASE_URL"]
-    db_pool = psycopg_pool.ConnectionPool(conninfo=db_url, min_size=80)
-    corpus = {}
-    with open("../datasets/database-dumps/all-foodbase-descriptions.csv") as f:
-        csvreader = csv.DictReader(f)
-        for row in csvreader:
-            corpus[row["fdc_id"]] = row["description"]
+    df_portion_names = pandas.merge(df_portion, df_measure, left_on="measure_unit_id", right_on="id", how="left", suffixes=("_portion", "_measure"))
+    all_ids = set([int(k) for k in df_food_fltr["fdc_id"].to_list() if k is not None and k != ""])
+    print(len(all_ids))
 
     def fold_it(lst, it):
         lst[0][it[0]] = it[1]
         lst[1][it[0]] = it[2]
         return lst
 
-    with ThreadPool(40) as pool:
-        items = pool.map(run_it, corpus.keys())
+    with ThreadPool(20) as pool:
+        items = pool.map(run_it, all_ids)
         nutris_json, portions_json = reduce(fold_it, items, ({}, {}))
 
-    with open("./fdc_nutris.json", "w") as f:
+    with open("./data/fdc_nutris.json", "w") as f:
         json.dump(nutris_json, f, indent=4)
-    with open("./fdc_portions.json", "w") as f:
+    with open("./data/fdc_portions.json", "w") as f:
         json.dump(portions_json, f, indent=4)
+    df_food_fltr.to_csv(f"./data/all-foodbase-descriptions.csv")
