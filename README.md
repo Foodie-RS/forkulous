@@ -12,7 +12,7 @@ Also see: [Huggingface project page](https://huggingface.co/Forkulous)
 
 ## Running Forkulous
 
-Forkulous requires two things to run: The USDA FoodData Central dataset, in a JSON format that Forkulous likes, and the transformer models for searching it.
+Forkulous requires the USDA FoodData Central dataset, in a JSON format that Forkulous likes.
 
 1. Download the [FoodDataCentral](https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_csv_2026-04-30.zip) dataset.
 2. Prepare a virtual environment with all dependencies from requirements.txt. 
