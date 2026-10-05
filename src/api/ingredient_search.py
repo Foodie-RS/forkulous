@@ -83,20 +83,20 @@ class SearchAPI:
         self.unit_ranker = unit_ranker
         self.def_search_params = def_search_params
         state = RequestState()
-        state.set_provider(ParsedIngredient, ParserProvider(_type=ParsedIngredient))
-        state.set_provider(ParseResults, ParseResultProvider(_type=ParseResults))
-        state.set_provider(ShortParseResult, ShortParseResultProvider(_type=ShortParseResult))
-        state.set_provider(SearchResult, IngredientSearchProvider(_type=SearchResult))
-        state.set_provider(S6_SemanticPrep_Res, S6_SemanticPrep_Prov(_type=S6_SemanticPrep_Res, unit_ranker=self.unit_ranker))
-        state.set_provider(S5_SelectUnits_Res, S5_SelectUnits_Prov(_type=Option[S5_SelectUnits_Res]))
-        state.set_provider(S3_AggrDict_Res, S3_AggrDict_Prov(_type=S3_AggrDict_Res))
-        state.set_provider(S4_DictFilter_Res, S4_DictFilter_Prov(_type=Option[S4_DictFilter_Res], unit_ranker=self.unit_ranker))
+        state.add_provider(ParsedIngredient, ParserProvider(_type=ParsedIngredient))
+        state.add_provider(ParseResults, ParseResultProvider(_type=ParseResults))
+        state.add_provider(ShortParseResult, ShortParseResultProvider(_type=ShortParseResult))
+        state.add_provider(SearchResult, IngredientSearchProvider(_type=SearchResult))
+        state.add_provider(S6_SemanticPrep_Res, S6_SemanticPrep_Prov(_type=S6_SemanticPrep_Res, unit_ranker=self.unit_ranker))
+        state.add_provider(S5_SelectUnits_Res, S5_SelectUnits_Prov(_type=Option[S5_SelectUnits_Res]))
+        state.add_provider(S3_AggrDict_Res, S3_AggrDict_Prov(_type=S3_AggrDict_Res))
+        state.add_provider(S4_DictFilter_Res, S4_DictFilter_Prov(_type=Option[S4_DictFilter_Res], unit_ranker=self.unit_ranker))
         for cls, prov in providers.items():
             if isinstance(prov, list):
                 for inner_prov in prov:
-                    state.multi_add_prov(cls, inner_prov)
+                    state.add_provider(cls, inner_prov)
             else:
-                state.set_provider(cls, prov)
+                state.add_provider(cls, prov)
         self.default_state = state
 
     def search_ingredient(self,req:SearchRequest)->SearchResponse:

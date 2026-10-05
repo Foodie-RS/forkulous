@@ -14,9 +14,9 @@ class UnitDensityProvider(OptionalProvider[Density]):
     @override
     def execute(self, state: RequestState) -> Option[Density]:
         logger = logging.getLogger("ingr_api").getChild("DefDensProv")
-        lst = state.multi_get_opt(UnitDictResult, allow_deferred=False)
+        lst = state.get_all(UnitDictResult, allow_deferred=False)
         dct_merged:dict[str, list[UnitCandidate]] = {}
-        for it in [k.unwrap() for k in lst if k.is_some()]:
+        for it in lst:
             for k,v in it.res.items():
                 inner_lst:list[UnitCandidate] = dct_merged.setdefault(k, [])
                 inner_lst.extend(v)

@@ -31,7 +31,7 @@ class ParserProvider(Provider[ParsedIngredient]):
         logger = logging.getLogger("ingr_api").getChild("PrsrProv")
         search_req = state.get(SearchRequest)
         # Create combined unit_dict and unit_names
-        unit_names_list:list[S1_UnitNames_Res] = state.multi_get(S1_UnitNames_Res)
+        unit_names_list:list[S1_UnitNames_Res] = state.get_all(S1_UnitNames_Res)
         unit_names:dict[str, str] = {}
         for it in unit_names_list:
             unit_names.update(it.res)
@@ -97,7 +97,7 @@ class ParseResultProvider(Provider[ParseResults]):
                 if (not amnt.unit) or (amnt.unit == ""):
                     actual_amount = float(amnt.quantity)
                     logger.debug("Empty unit, looking up default unit")
-                    def_unit = state_msk.multi_get(EmptyUnitResult)
+                    def_unit = state_msk.get_all(EmptyUnitResult)
                     def_units = [k.res for k in def_unit]
                     def_units.sort(key=lambda k:k.relevance(), reverse=True)
                     new_unit = def_units[0]
@@ -125,7 +125,7 @@ class ParseResultProvider(Provider[ParseResults]):
         else: # if len(parsed.amount) == 0
             actual_amount = 1
             logger.debug("No amount found, defaulting to 1")
-            def_unit = state.multi_get_first(FallbackUnitCandidate)
+            def_unit = state.get(FallbackUnitCandidate)
             best_selected_units = [(def_unit, None)]
             best_amount = None
             best_inner_amount = 1.0

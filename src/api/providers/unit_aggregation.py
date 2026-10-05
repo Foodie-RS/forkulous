@@ -126,7 +126,7 @@ class S5_SelectUnits_Prov(OptionalProvider[S5_SelectUnits_Res]):
         #fallback
         if (len(topk) == 0 or topk[0][1] < UNIT_RELEVANCE_CUTOFF):
             logger.warning("Calling fallback providers because no suitable unit was found")
-            un = state.multi_get_first(FallbackUnitCandidate)
+            un = state.get(FallbackUnitCandidate)
             rel = un.relevance()
             added = False
             for ix, (_, score) in enumerate(topk):
@@ -147,7 +147,7 @@ class S3_AggrDict_Prov(Provider[S3_AggrDict_Res]):
     def execute(self, state: RequestState) -> S3_AggrDict_Res:
         logger = logging.getLogger("ingr_api").getChild("AggrUnitDict")
         logger.debug("Aggregating results")
-        all_dicts = state.multi_get(UnitDictResult, allow_deferred=True)
+        all_dicts = state.get_all(UnitDictResult, allow_deferred=True)
         logger.debug(f"Got {len(all_dicts)} result dicts, with a total of {sum(sum(len(it) for it in k.res.values()) for k in all_dicts)} entries")
         res:dict[str, list[UnitCandidate]] = {}
         for inner_res in all_dicts:

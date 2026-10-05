@@ -23,7 +23,7 @@ class IngredientSearchProvider(Provider[SearchResult]):
         logger = logging.getLogger("ingr_api").getChild("IngrSrchProv")
         params:SearchParams = state.get(SearchRequest).search_params
         results:list[IngredientCandidate] = []
-        ingr_list = state.multi_get(ProviderSearchResult)
+        ingr_list = state.get_all(ProviderSearchResult)
         for lst in ingr_list:
             results.extend(lst.results)
 
@@ -36,7 +36,7 @@ class IngredientSearchProvider(Provider[SearchResult]):
         for ing in results:
             msk = state.mask()
             msk.set(IngredientCandidate, ing)
-            nutris = msk.multi_get_first(NutriSearchResult).result
+            nutris = msk.get(NutriSearchResult).result
             results_new.append(IngredientModel(
                 id=ing.id,
                 description=ing.description,

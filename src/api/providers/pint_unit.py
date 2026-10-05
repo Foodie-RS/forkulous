@@ -62,7 +62,7 @@ class PintUnitProvider(Provider[UnitDictResult]):
             is_volume = False
             density_confidence:float|None = 1.0
             if not gram_compatible and pint_amnt.is_compatible_with("ml"):
-                density_w = state.multi_get_first_opt(Density)
+                density_w = state.get_optional(Density)
                 if density_w.is_none():
                     logger.debug("No density available, skipping")
                     return UnitDictResult(res={})
