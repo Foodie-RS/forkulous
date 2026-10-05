@@ -48,15 +48,42 @@ state = self.default_state.copy() # Create the `RequestState` object by copying 
 state.set(SearchRequest, req) # Store the `SearchRequest` in the newly created state.
 search_res = state.get(SearchResult) # Fetch the result. This causes the `Provider` for `SearchResult` to be executed, which in turn causes the ingredient search, unit search, etc. 
 ```
-Doing it like this has many advantages, but also some disadvantages:
+Doing it like this has many advantages, but also some disadvantages.
+Advantages:
 - All `Provider`s are isolated from each other, making it easy to test and debug them.
-- Forkulous is extremely extensible and can easily be changed to use different data sources. You don't even need to modify the codebase at all!
 - Only code that needs to run is actually executed, speeding up the request.
-- `Provider`s cannot have side effects. That means that for the same state object, it should ALWAYS return the same result. 
+- Forkulous is extremely extensible and can easily be changed to use different data sources. You don't even need to modify the codebase at all! Consider this code block:
+```python
+# your_program.py
+api = SearchAPI(...)
+api.add_provider(SearchResult, MyCoolSearchProvider(), insert=True)
+```
+A call to `api.search()` will now use your own custom provider for SearchResult instead of the default one, giving you complete control over the search logic! You can even use the old provider for `SearchRequest` in your new `Provider`! Look at this:
+```python
+class MyCoolSearchProvider(Provider[SearchResult]):
+    @override
+    def deferred(self):
+        return True
+    
+    def __init__():
+        super().__init__(SearchResult)
+
+    @override
+    def execute(self, state: RequestState) -> SearchResult:
+        old_result = state.get(SearchResult, allow_deferred=False)
+        # do something cool with old_result
+        return new_result
+```
+Under the hood, a call to `api.search` will call `state.get(SearchResult)`. Because `allow_deferred` is `True` by default, this call will then call `MyCoolSearchProvider.execute`, which again requests `SearchResult`. But now `allow_deferred` is `False`, so the pipeline skips your provider in this call, and goes straight to the old provider. It then executes all the usual logic, and returns the `SearchResult` not to `api.search`, but to your provider. The result of your Provider will be used as the search result for the `api.search` method.
+
+I hope you can see why I find this abstraction cool and the right fit for the task of recipe calculations.
+
+But there are some disadvantages and things to keep in mind:
+- `Provider`s should not have side effects. That means that for the same state object, it should generally return the same result. Ideally, you should only use local data and not rely on external databases that may be modified during the request.
 - Stacktraces are often very long, because of all the nested execution.
-- It's easy to create dependency cycles (which will result in infinite recursion).
+- It's easy to create dependency cycles (which will result in infinite recursion). `deferred()` can mitigate this somewhat (see above).
 - No guarantees can be made on if or when a `Provider` is executed. There is no explicit dependency system for providers.
-- It is necessary that all `Provider`s return the types that they are supposed to return. Notably, you should never return `None`. Use `OptionalProvider` and `Option.none()` instead.
+- It is necessary that all `Provider`s adhere to typing. Notably, you should never return `None`. Inherit from `OptionalProvider` and return `Option.none()` instead.
 
 ## AI
 Forkulous, like Foodie-RS, is a project by humans for humans. I consider programming an art, as much as a craft. I don't intend to use AI for most of the project. However, I did use AI on a number of occasions: to explain to me concepts that I am unfamiliar with, or to give me snippets for things that I need. In particular, the dataset for training the ingredient search models has been created almost entirely by an LLM, as I simply cannot annotate 10,000 tuples by myself.

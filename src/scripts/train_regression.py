@@ -1,30 +1,25 @@
 import json
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 import torch
-from torch import nn
-from datasets import Dataset
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    TrainingArguments,
-    Trainer,
-    DataCollatorWithPadding
-)
 from scipy.stats import pearsonr
-from peft import LoraConfig, get_peft_model, TaskType
+from sklearn.preprocessing import StandardScaler
+from torch import nn
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    Trainer,
+    TrainingArguments,
+)
 
-DO_LORA=False
+from datasets import Dataset
+
 ADD_CLASS_LAYER=False
-MODEL_NAME="microsoft/deberta-v3-large"
-IS_LLM=False
+MODEL_NAME="microsoft/deberta-v3-base"
 STANDARD_SCALER=True
 L1_LOSS=False
-DO_LOG1P=False
-DO_EXP=False
-#MODEL_NAME="Qwen/Qwen2.5-7B"
-#IS_LLM=True
+DO_LOG1P=True
 MAX_LENGTH = 60
 WARMUP_RT=0.1
 NUM_EPOCHS=4
@@ -35,12 +30,6 @@ LR_HEAD=1e-4
 ACTUAL_BATCH=16
 GR_ACC=1
 
-#=== LORA ====
-LORA_TRAIN_EMBEDDINGS=True
-LR_LORA=5e-5
-ACTUAL_BATCH_LORA=2
-GR_ACC_LORA=8
-
 EVALS_PER_EPOCH=3
 
 loss_fn = nn.SmoothL1Loss(beta=0.25)
@@ -49,21 +38,13 @@ def smooth_l1_loss_func(outputs, labels, num_items_in_batch=None):
     logits = outputs.logits.squeeze(-1)
     return loss_fn(logits, labels)
 
-LORA=DO_LORA or IS_LLM
-with open("./fdc_unit_reg_dense.eval.json", "r") as f:
+with open("./fdc_unit_reg.eval.json", "r") as f:
     eval_dict = json.load(f)
 
-with open("./fdc_unit_reg_dense.train.json", "r") as f:
+with open("./fdc_unit_reg.train.json", "r") as f:
     train_dict = json.load(f)
 
-if IS_LLM:
-    train_dict["text"] = [k + "\nWEIGHT: " for k in train_dict["text"]]
-    eval_dict["text"] = [k + "\nWEIGHT: " for k in eval_dict["text"]]
-
-GR_ACC_ACT = GR_ACC_LORA if LORA else GR_ACC
-A_BATCH_ACT = ACTUAL_BATCH_LORA if LORA else ACTUAL_BATCH
-
-STEPS_PER_EPOCH = len(train_dict["text"]) / (GR_ACC_ACT * A_BATCH_ACT)
+STEPS_PER_EPOCH = len(train_dict["text"]) / (GR_ACC * ACTUAL_BATCH)
 
 WARMUP_STEPS = int(NUM_EPOCHS * WARMUP_RT * STEPS_PER_EPOCH)
 
@@ -75,11 +56,10 @@ assert np.all(train_labels_raw >= 0), f"Negative Labels gefunden! Minimum: {trai
 scaler = StandardScaler()
 if DO_LOG1P:
     train_labels_log = np.log1p(train_labels_raw).reshape(-1, 1)
-elif DO_EXP:
-    train_labels_log = np.expm1(train_labels_raw).reshape(-1,1)
 else:
     train_labels_log = train_labels_raw.reshape(-1, 1)
 scaler.fit(train_labels_log)
+
 ds_eval = Dataset.from_dict(eval_dict)
 ds_train = Dataset.from_dict(train_dict).shuffle(42)
 
@@ -96,8 +76,6 @@ def preprocess_function(examples):
         )
     if DO_LOG1P:
         values = np.log1p(examples["label"])
-    elif DO_EXP:
-        values = np.expm1(examples["label"])
     else:
         values = np.array(examples["label"])
     if STANDARD_SCALER:
@@ -121,7 +99,7 @@ if model.config.pad_token_id is None:
     model.config.pad_token_id = tokenizer.pad_token_id
 
 mean_log_target = float(np.mean(tok_ds_train["label"]))
-if ADD_CLASS_LAYER and not IS_LLM:
+if ADD_CLASS_LAYER:
     hidden_size = model.config.hidden_size
     model.classifier = nn.Sequential(
         nn.Linear(hidden_size, 256),
@@ -133,13 +111,6 @@ if ADD_CLASS_LAYER and not IS_LLM:
     # Bias der letzten Schicht auf den Log-Mittelwert setzen:
     with torch.no_grad():
         model.classifier[-1].bias.fill_(mean_log_target)
-elif IS_LLM:
-    hidden_size = model.config.hidden_size
-    model.score = nn.Linear(hidden_size, 1, bias=True).to(model.dtype)
-
-    with torch.no_grad():
-        nn.init.normal_(model.score.weight, mean=0.0, std=0.01)
-        model.score.bias.fill_(mean_log_target)
 else:
     with torch.no_grad():
         if hasattr(model.classifier, "out_proj"):  # RoBERTa
@@ -148,19 +119,6 @@ else:
         elif isinstance(model.classifier, nn.Linear):  # DeBERTa / DistilBERT
             #nn.init.normal_(model.classifier.weight, mean=0.0, std=0.001)
             model.classifier.bias.fill_(mean_log_target)
-
-if LORA:
-    lora_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.1,
-        bias="none",
-        target_modules=["word_embeddings", "query_proj", "key_proj", "value_proj", "dense"] if LORA_TRAIN_EMBEDDINGS and not IS_LLM else "all-linear",
-    )
-
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
 
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
@@ -174,14 +132,11 @@ def compute_metrics(eval_pred):
     if DO_LOG1P:
         predictions = np.expm1(predictions)
         labels = np.expm1(labels)
-    elif DO_EXP:
-        predictions = np.log1p(predictions)
-        labels = np.log1p(labels)
     abs_err = np.abs(labels - predictions)
     mae = np.mean(abs_err)
     rmse = np.sqrt(np.mean(abs_err ** 2))
-    medae = np.median(abs_err)  # 50% aller Schätzungen sind genauer als dieser Wert!
-    mape = np.mean(abs_err / np.maximum(labels, 1.0)) * 100  # Prozentualer Fehler
+    medae = np.median(abs_err)
+    mape = np.mean(abs_err / np.maximum(labels, 1.0)) * 100
     stdev = np.std(abs_err / np.maximum(labels, 1.0)) * 100
     pearson_corr, _ = pearsonr(labels, predictions)
 
@@ -209,12 +164,12 @@ optimizer_grouped_parameters = [
 ]
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, weight_decay=0.01)
 training_args = TrainingArguments(
-    output_dir="./models/dense_unit_regar",
-    learning_rate=LR if not LORA else LR_LORA,
+    output_dir="./models/nonstd_unit",
+    learning_rate=LR,
     lr_scheduler_type="cosine",
-    per_device_train_batch_size=A_BATCH_ACT,
-    gradient_accumulation_steps=GR_ACC_ACT,
-    per_device_eval_batch_size=A_BATCH_ACT,
+    per_device_train_batch_size=ACTUAL_BATCH,
+    gradient_accumulation_steps=GR_ACC,
+    per_device_eval_batch_size=ACTUAL_BATCH,
     num_train_epochs=NUM_EPOCHS,
     #max_grad_norm=10.0,
     logging_nan_inf_filter=False,

@@ -26,8 +26,8 @@ index = Index(ndim=D, metric="cos", dtype="f16")
 index.add(keys, embeddings)
 
 clustering = index.cluster(
-    min_count=10,  # Minimale Clustergröße
-    max_count=100  # Maximale Clustergröße
+    min_count=10,
+    max_count=100
 )
 
 centroid_keys, _ = clustering.centroids_popularity
@@ -37,7 +37,6 @@ for c_key in centroid_keys:
     member_indices = clustering.members_of(c_key)
     cluster_ids[member_indices] = c_key
 
-# Sicherheitscheck: Muss exakt die Anzahl deiner Datenpunkte (N) sein!
 assert len(cluster_ids) == len(embeddings)
 
 gss = GroupShuffleSplit(n_splits=1, test_size=0.13, random_state=42)

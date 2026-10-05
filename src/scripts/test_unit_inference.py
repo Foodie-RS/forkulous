@@ -4,10 +4,9 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 import torch
 import torch.nn as nn
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from peft import PeftModel
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, DebertaForSequenceClassification
 
-MODEL_DIR="./models/unit_regression_6/checkpoint-6270"
+MODEL_DIR="./models/unit_regression_6/checkpoint-6840"
 
 with open("./fdc_unit_reg.train.json", "r") as f:
     train_dict = json.load(f)
@@ -26,7 +25,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
-model = AutoModelForSequenceClassification.from_pretrained(
+model:DebertaForSequenceClassification = AutoModelForSequenceClassification.from_pretrained(
     MODEL_DIR,
     num_labels=1,
     problem_type="regression",
@@ -37,6 +36,19 @@ model.config.pad_token_id = tokenizer.pad_token_id
 
 model.eval()
 
+def add_scaler():
+    with torch.no_grad():
+        scale = float(scaler.scale_[0])
+        mean = float(scaler.mean_[0])
+
+        if hasattr(model.classifier, "out_proj"):
+            final_layer = model.classifier.out_proj
+        elif isinstance(model.classifier, nn.Linear):
+            final_layer = model.classifier
+
+        final_layer.weight.mul_(scale)
+        final_layer.bias.mul_(scale).add_(mean)
+    model.save_pretrained("./scaled_model")
 
 def predict_weights(items: list[dict]) -> list[float]:
     prompts = []
@@ -64,16 +76,14 @@ def predict_weights(items: list[dict]) -> list[float]:
     return predictions.tolist()
 
 
-# 6. Testlauf mit Beispiel-Zutaten
 test_ingredients = [
     {"food": "Carrot, raw", "unit": "medium", "comments": "none"},
     {"food": "Ribs, NFS", "unit": "rack", "comments": "none"},
     {"food": "Celery, NFS", "unit": "stalk", "comments": "[diced]"},
 ]
 
-print("Starte inferenz")
-predicted_grams = predict_weights(test_ingredients)
+#predicted_grams = predict_weights(test_ingredients)
 
-print("\n--- Vorhersagen ---")
-for item, grams in zip(test_ingredients, predicted_grams):
-    print(f"{item['unit']:>8} | {item['food']:<12} ({item['comments']}) -> {grams:6.1f} g")
+#for item, grams in zip(test_ingredients, predicted_grams):
+#    print(f"{item['unit']:>8} | {item['food']:<12} ({item['comments']}) -> {grams:6.1f} g")
+add_scaler()

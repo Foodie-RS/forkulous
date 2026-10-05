@@ -176,7 +176,7 @@ class RequestState:
         self,
         key: type[T],
         callback: Provider[T] | OptionalProvider[T],
-        append:bool=True
+        insert:bool=False
     ):
         logger = logging.getLogger("ingr_api").getChild("ReqState").getChild("set_prov")
         with self._lock:
@@ -188,7 +188,7 @@ class RequestState:
             prom:_StorePromise[T] = _StorePromise(_provider=callback)
 
             lst:list[_StorePromise[T]] = cast(list[_StorePromise[T]], self._store.setdefault(key, []))
-            if append:
+            if not insert:
                 logger.log(5, f"Appending provider for {key} (origin: {origin})")
                 lst.append(prom)
             else:

@@ -7,8 +7,10 @@ venv/**/*
 **/__pycache__
 datasets/**
 models/**
+models_new/**
 index/**
 data/**
 **/*.csv
 **/*.dat
 src/**/*.json
+fdc_*.json

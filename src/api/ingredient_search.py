@@ -64,7 +64,7 @@ from api.providers.unit_aggregation import (
     S5_SelectUnits_Prov,
     S6_SemanticPrep_Prov,
 )
-from api.state import Provider, RequestState
+from api.state import OptionalProvider, Provider, RequestState
 
 BE_DEF_Q_PROMPT = "ingredient: "
 BE_DEF_D_PROMPT = "usda: "
@@ -75,22 +75,20 @@ UNIT_RELEVANCE_CUTOFF = 0.7
 
 @dataclass(init=False)
 class SearchAPI:
-    unit_ranker:SentenceTransformer
     def_search_params:SearchParams
     default_state:RequestState
 
     def __init__(self, providers:dict[type[Any], list[Provider[Any]]|Provider[Any]], unit_ranker:SentenceTransformer, def_search_params:SearchParams):
-        self.unit_ranker = unit_ranker
         self.def_search_params = def_search_params
         state = RequestState()
         state.add_provider(ParsedIngredient, ParserProvider(_type=ParsedIngredient))
         state.add_provider(ParseResults, ParseResultProvider(_type=ParseResults))
         state.add_provider(ShortParseResult, ShortParseResultProvider(_type=ShortParseResult))
         state.add_provider(SearchResult, IngredientSearchProvider(_type=SearchResult))
-        state.add_provider(S6_SemanticPrep_Res, S6_SemanticPrep_Prov(_type=S6_SemanticPrep_Res, unit_ranker=self.unit_ranker))
+        state.add_provider(S6_SemanticPrep_Res, S6_SemanticPrep_Prov(_type=S6_SemanticPrep_Res, unit_ranker=unit_ranker))
         state.add_provider(S5_SelectUnits_Res, S5_SelectUnits_Prov(_type=Option[S5_SelectUnits_Res]))
         state.add_provider(S3_AggrDict_Res, S3_AggrDict_Prov(_type=S3_AggrDict_Res))
-        state.add_provider(S4_DictFilter_Res, S4_DictFilter_Prov(_type=Option[S4_DictFilter_Res], unit_ranker=self.unit_ranker))
+        state.add_provider(S4_DictFilter_Res, S4_DictFilter_Prov(_type=Option[S4_DictFilter_Res], unit_ranker=unit_ranker))
         for cls, prov in providers.items():
             if isinstance(prov, list):
                 for inner_prov in prov:
@@ -98,6 +96,9 @@ class SearchAPI:
             else:
                 state.add_provider(cls, prov)
         self.default_state = state
+
+    def add_provider[T](self, what:type[T], prov:Provider[T]|OptionalProvider[T], insert:bool=True):
+        self.default_state.add_provider(what, prov, insert)
 
     def search_ingredient(self,req:SearchRequest)->SearchResponse:
         logger = logging.getLogger("ingr_api").getChild("search_ingredient")
