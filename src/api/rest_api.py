@@ -42,5 +42,5 @@ async def search(request:Request, search_req:SearchRequest):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING)
     logger = logging.getLogger("ingr_api")
-    logger.setLevel(level=logging.DEBUG)
+    logger.setLevel(level=5)
     uvicorn.run(app, host="0.0.0.0", port=12345)

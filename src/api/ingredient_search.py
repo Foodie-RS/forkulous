@@ -65,7 +65,7 @@ from api.providers.unit_aggregation import (
     S5_SelectUnits_Prov,
     S6_SemanticPrep_Prov,
 )
-from api.state import OptionalProvider, Provider, RequestState
+from api.state import OptionalProvider, Provider, RequestState, RootState
 
 BE_DEF_Q_PROMPT = "ingredient: "
 BE_DEF_D_PROMPT = "usda: "
@@ -77,11 +77,11 @@ UNIT_RELEVANCE_CUTOFF = 0.7
 @dataclass(init=False)
 class SearchAPI:
     def_search_params:SearchParams
-    default_state:RequestState
+    default_state:RootState
 
     def __init__(self, providers:dict[type[Any], list[Provider[Any]]|Provider[Any]], unit_ranker:SentenceTransformer, def_search_params:SearchParams):
         self.def_search_params = def_search_params
-        state = RequestState()
+        state = RootState()
         state.add_provider(ParsedIngredient, ParserProvider(_type=ParsedIngredient))
         state.add_provider(ParseResults, ParseResultProvider(_type=ParseResults))
         state.add_provider(ShortParseResult, ShortParseResultProvider(_type=ShortParseResult))
@@ -104,7 +104,8 @@ class SearchAPI:
     def search_ingredient(self,req:SearchRequest)->SearchResponse:
         logger = logging.getLogger("ingr_api").getChild("search_ingredient")
         req.search_params.validate_params()
-        state = self.default_state.copy()
+        root_state:RootState = self.default_state.clone()
+        state = root_state.new_request()
         state.set(pint.UnitRegistry[Any], UREG)
         state.set(SearchRequest, req)
         ingr_search_res = state.get(SearchResult)
