@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, DebertaForSequenceClassification
 
-MODEL_DIR="./models/unit_regression_6/checkpoint-6840"
+MODEL_DIR="./models/tf-forkulous-units"
 
 with open("./fdc_unit_reg.train.json", "r") as f:
     train_dict = json.load(f)
@@ -30,7 +30,7 @@ model:DebertaForSequenceClassification = AutoModelForSequenceClassification.from
     num_labels=1,
     problem_type="regression",
     torch_dtype=torch.float32,
-    low_cpu_mem_usage=True,
+    #low_cpu_mem_usage=True,
 )
 model.config.pad_token_id = tokenizer.pad_token_id
 
@@ -48,7 +48,7 @@ def add_scaler():
 
         final_layer.weight.mul_(scale)
         final_layer.bias.mul_(scale).add_(mean)
-    model.save_pretrained("./scaled_model")
+    model.save_pretrained(MODEL_DIR)
 
 def predict_weights(items: list[dict]) -> list[float]:
     prompts = []
@@ -56,7 +56,6 @@ def predict_weights(items: list[dict]) -> list[float]:
         food = item["food"]
         unit = item["unit"]
         comments = item.get("comments", "none")
-        # Exakt das Format aus deinem Training:
         prompt = f"FOOD: {food}\nUNIT: {unit}\nCOMMENTS: {comments}"
         prompts.append(prompt)
 
@@ -70,20 +69,23 @@ def predict_weights(items: list[dict]) -> list[float]:
 
     with torch.no_grad():
         outputs = model(**inputs)
-        predictions = scaler.inverse_transform(outputs.logits.squeeze(-1).reshape(-1, 1)).squeeze(-1)
+        predictions = outputs.logits.squeeze(-1)
+        #predictions = scaler.inverse_transform(predictions.reshape(-1, 1)).squeeze(-1)
         predictions = np.expm1(np.clip(predictions, a_min=None, a_max=20.0))
 
     return predictions.tolist()
 
 
 test_ingredients = [
-    {"food": "Carrot, raw", "unit": "medium", "comments": "none"},
+    {"food": "Carrot, raw", "unit": "large", "comments": "none"},
     {"food": "Ribs, NFS", "unit": "rack", "comments": "none"},
     {"food": "Celery, NFS", "unit": "stalk", "comments": "[diced]"},
+    {"food": "Oil", "unit": "liter", "comments": "none"},
+
 ]
 
-#predicted_grams = predict_weights(test_ingredients)
+predicted_grams = predict_weights(test_ingredients)
 
-#for item, grams in zip(test_ingredients, predicted_grams):
-#    print(f"{item['unit']:>8} | {item['food']:<12} ({item['comments']}) -> {grams:6.1f} g")
-add_scaler()
+for item, grams in zip(test_ingredients, predicted_grams):
+    print(f"{item['unit']:>8} | {item['food']:<12} ({item['comments']}) -> {grams:6.3f} g")
+#add_scaler()

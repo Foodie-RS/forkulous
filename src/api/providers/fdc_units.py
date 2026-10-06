@@ -12,7 +12,7 @@ from api.models import (
     ParserState,
     S1_UnitNames_Res,
     UnitCandidate,
-    UnitDictResult,
+    S2_UnitDict_Res,
 )
 from api.providers.fdc_ingredient import FDCCandidates
 from api.providers import unit_aggregation
@@ -38,6 +38,11 @@ def _cmp(items:list[tuple[Any, Any, bool]]):
 @dataclass
 class FDCUnitNamesProv(Provider[S1_UnitNames_Res]):
     unit_corpus:dict[str, list[dict[Any, Any]]]
+
+    def __init__(self,unit_corpus:dict[str, list[dict[Any, Any]]]):
+        super().__init__(S1_UnitNames_Res)
+        self.unit_corpus = unit_corpus
+
     @override
     def execute(self, state: RequestState) -> S1_UnitNames_Res:
         names:dict[str, str] = {}
@@ -50,10 +55,14 @@ class FDCUnitNamesProv(Provider[S1_UnitNames_Res]):
         return S1_UnitNames_Res(res=names)
 
 @dataclass
-class LocalFDCUnitDictProv(Provider[UnitDictResult]):
+class LocalFDCUnitDictProv(Provider[S2_UnitDict_Res]):
     unit_corpus:dict[str, list[dict[Any, Any]]]
+
+    def __init__(self, unit_corpus:dict[str, list[dict[Any,Any]]]):
+        super().__init__(S2_UnitDict_Res)
+        self.unit_corpus=unit_corpus
     @override
-    def execute(self, state: RequestState) -> UnitDictResult:
+    def execute(self, state: RequestState) -> S2_UnitDict_Res:
         logger = logging.getLogger("ingr_api").getChild("FDCUnitProv")
         fdc_candidates = state.get(FDCCandidates)
         logger.debug(f"Got {len(fdc_candidates)} candidates")
@@ -100,7 +109,7 @@ class LocalFDCUnitDictProv(Provider[UnitDictResult]):
                 else:
                     units[new_unit.unit_name] = [new_unit]
         logger.debug(f"Got a total of {len(units)} units.")
-        return UnitDictResult(res=units)
+        return S2_UnitDict_Res(res=units)
 
 def _get_default(unit_ranker:SentenceTransformer, crps:dict[str, list[dict[Any, Any]]], state:RequestState) -> Option[UnitCandidate]:
     logger = logging.getLogger("ingr_api").getChild("_get_def_un")
@@ -139,7 +148,7 @@ def _get_default(unit_ranker:SentenceTransformer, crps:dict[str, list[dict[Any, 
     if len(res) == 0:
         logger.debug("No `serving` found.")
         return Option.none()
-    elif res[0][1] < 0.2:
+    elif res[0][1] < 0.5:
         logger.debug("Score too low, returning None")
         return Option.none()
     else:
@@ -150,6 +159,11 @@ class FDCEmptyUnitProv(OptionalProvider[EmptyUnitResult]):
     unit_corpus:dict[str, list[dict[Any, Any]]]
     unit_ranker:SentenceTransformer
 
+    def __init__(self, unit_corpus:dict[str, list[dict[Any, Any]]], unit_ranker:SentenceTransformer):
+        super().__init__(Option[EmptyUnitResult])
+        self.unit_ranker = unit_ranker
+        self.unit_corpus = unit_corpus
+
     @override
     def execute(self, state:RequestState) -> Option[EmptyUnitResult]:
         res = _get_default(self.unit_ranker, self.unit_corpus, state)
@@ -158,7 +172,40 @@ class FDCEmptyUnitProv(OptionalProvider[EmptyUnitResult]):
 
 @dataclass
 class FDCFbUnitProv(OptionalProvider[FallbackUnitCandidate]):
-    unit_corpus:dict[str, list[dict[Any, Any]]]
+    units:dict[str, FallbackUnitCandidate]
+    name_eq:dict[str, str]
+
+    def __init__(self, unit_corpus:dict[str, list[dict[Any, Any]]]):
+        super().__init__(Option[FallbackUnitCandidate])
+        self.name_eq = {}
+        units: dict[str, list[dict[Any, Any]]]= {}
+        self.units = {}
+        for units_l in unit_corpus.values():
+            for unit in units_l:
+                unit_tgt = None
+                for k in [unit["unit_name"], unit["singular_name"], unit["plural_name"]]:
+                    if k in self.name_eq:
+                        unit_tgt = self.name_eq[k]
+                        break
+                if unit_tgt is None:
+                    unit_tgt = unit["unit_name"]
+                    self.name_eq[unit["singular_name"]]= unit["unit_name"]
+                    self.name_eq[unit["plural_name"]] = unit["unit_name"]
+                lst = units.setdefault(unit_tgt, [])
+                lst.append(unit)
+        for k,v in units.items():
+            grams = sum(it["gram_weight"] for it in v) / len(v)
+            self.units[k] = FallbackUnitCandidate(
+                unit_name=k,
+                comments=[],
+                entry_id=-1,
+                gram_weight=grams,
+                modifier=None,
+                plural_name=v[0]["plural_name"],
+                singular_name=v[0]["singular_name"],
+                source="db_fallback"
+            )
+
     @override
     def execute(self, state:RequestState) -> Option[FallbackUnitCandidate]:
         logger = logging.getLogger("ingr_api").getChild("FDCFbProv")
@@ -167,91 +214,12 @@ class FDCFbUnitProv(OptionalProvider[FallbackUnitCandidate]):
             logger.debug("Can't provide fallback unit because unit is empty")
             return Option.none()
         unit = pstate.unit.unwrap()
-        sum_gr:float = 0
-        cnt_gr:float = 0
-        name_low = unit.lower()
-        if unit.endswith("s"):
-            name_sngl = name_low[:-1]
-            name_plrl = name_low
+        if unit in self.name_eq:
+            res = Option.some_if(self.units.get(self.name_eq[unit]))
         else:
-            name_sngl = name_low
-            name_plrl = name_low + "s"
-        for v in self.unit_corpus.values():
-            for it_unit in v:
-                if not it_unit["unit_name"]:
-                    continue
-                if it_unit["unit_name"].lower() == name_sngl or it_unit["unit_name"].lower() == name_plrl:
-                    sum_gr += it_unit["gram_weight"]
-                    cnt_gr += 1
-        if cnt_gr == 0:
-            return Option.none()
-        gr_wgt = sum_gr / cnt_gr
-        cand = FallbackUnitCandidate(
-            comments=[],
-            entry_id=-1,
-            gram_weight=gr_wgt,
-            singular_name=name_sngl,
-            plural_name=name_plrl,
-            modifier=None,
-            source="f_fallback",
-            unit_name=unit
-        )
-        return Option.some(cand)
-
-#@dataclass
-#class FDCInferenceUnitProvider(FallbackUnitProvider):
-#    pipeline_nonstandard:UnitRegressionPipeline
-#    pipeline_empty:UnitRegressionPipeline
-#    @override
-#    def find_fallback_unit(self, unit: str, comments:list[str], ingredient_parsed:str|None, context:RequestState) -> UnitCandidate | None:
-#        logger = logging.getLogger("ingr_api").getChild("unit_inf_find_fb")
-#        logger.debug(f"Find unit for \"{unit}\" of \"{ingredient_parsed}\".")
-#        candidates= context.get(CandidatesType)
-#        cand_list = list(candidates.values())
-#        logger.debug(f"Ingredients in candidate list: [{", ".join([k.description for k in cand_list])}]")
-#        scores = np.array([k.score for k in cand_list])
-#        if unit.endswith("s"):
-#            sngl_name = unit[:-1]
-#            plrl_name = unit
-#        else:
-#            sngl_name = unit
-#            plrl_name = unit + "s"
-#
-#        logger.debug(f"Scores: {scores}")
-#        if len(cand_list) == 0:
-#            if ingredient_parsed is not None:
-#                logger.debug("No candidates found. Defaulting to parsed ingredient.")
-#            else:
-#                logger.debug("No candidates found and parsed ingredient is None. Defaulting to \"Food Item, NFS\"")
-#                ingredient_parsed = "Food Item, NFS"
-#
-#            grams = self.pipeline_nonstandard.predict_one(ingredient_parsed, unit, comments)
-#            logger.debug(f"Inference finished. Reported {grams} grams.")
-#            return FallbackUnitCandidate(
-#                comments=comments,
-#                unit_name=unit,
-#                plural_name=plrl_name,
-#                singular_name=sngl_name,
-#                gram_weight=float(grams),
-#                entry_id=-1,
-#                modifier=None,
-#                source="f_fallback"
-#            )
-#        unit_list = [unit] * len(cand_list)
-#        comment_list:list[list[str]|None] = [comments] * len(cand_list)
-#        grams = self.pipeline_nonstandard.predict_many([k.description for k in cand_list], unit_list, comment_list)
-#        logger.debug(f"Got grams: {grams}")
-#        total_score = np.sum(scores)
-#        mean_grams = np.sum(grams * scores) / total_score
-#        logger.debug(f"Calculated weighted mean grams as {mean_grams}")
-#
-#        return FallbackUnitCandidate(
-#            entry_id=-1,
-#            comments=comments,
-#            unit_name=unit,
-#            gram_weight=float(mean_grams),
-#            modifier=None,
-#            plural_name=plrl_name,
-#            singular_name=sngl_name,
-#            source="f_fallback"
-#        )
+            res = Option.some_if(self.units.get(unit))
+        if res.is_some():
+            logger.debug("Found fallback in database")
+        else:
+            logger.debug("No fallback found")
+        return res

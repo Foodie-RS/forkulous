@@ -1,9 +1,7 @@
-import json
 from dataclasses import dataclass
 
 import numpy as np
 import torch
-from sklearn.preprocessing import StandardScaler
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -14,10 +12,9 @@ from transformers import (
 
 @dataclass
 class UnitRegressionPipeline:
-    scaler:StandardScaler
     model:PreTrainedModel
     tokenizer:PreTrainedTokenizerBase
-    use_unit_input:bool=True
+    use_unit_input:bool=False
     do_expm1:bool=True
     max_len:int=80
     prompt:str="FOOD: {food}\nUNIT: {unit}\nCOMMENTS: {comments}"
@@ -39,16 +36,12 @@ class UnitRegressionPipeline:
 
         with torch.no_grad():
             outputs = self.model(**inputs)
-            predictions = self.scaler.inverse_transform(outputs.logits.squeeze(-1).reshape(-1, 1)).squeeze(-1)
+            predictions = outputs.logits.squeeze(-1)
             if self.do_expm1:
                 predictions:np.ndarray = np.expm1(np.clip(predictions, a_min=None, a_max=20.0))
         return float(predictions)
 
-def load_unit_model(model_path:str, scaler_params_path:str) -> UnitRegressionPipeline:
-    with open(scaler_params_path, "r") as f:
-        scaler_params = json.load(f)
-    scaler = StandardScaler(with_mean=scaler_params["mean"], with_std=scaler_params["std"])
-
+def load_unit_model(model_path:str) -> UnitRegressionPipeline:
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -58,7 +51,7 @@ def load_unit_model(model_path:str, scaler_params_path:str) -> UnitRegressionPip
         num_labels=1,
         problem_type="regression",
         torch_dtype=torch.float32,
-        low_cpu_mem_usage=True,
+        #low_cpu_mem_usage=True,
     )
     model.config.pad_token_id = tokenizer.pad_token_id
 
@@ -66,6 +59,5 @@ def load_unit_model(model_path:str, scaler_params_path:str) -> UnitRegressionPip
 
     return UnitRegressionPipeline(
         model=model,
-        scaler=scaler,
         tokenizer=tokenizer
     )

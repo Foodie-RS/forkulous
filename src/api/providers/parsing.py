@@ -97,6 +97,7 @@ class ParseResultProvider(Provider[ParseResults]):
                 if (not amnt.unit) or (amnt.unit == ""):
                     actual_amount = float(amnt.quantity)
                     logger.debug("Empty unit, looking up default unit")
+                    # TODO: replace with iter get
                     def_unit = state_msk.get_all(EmptyUnitResult)
                     def_units = [k.res for k in def_unit]
                     def_units.sort(key=lambda k:k.relevance(), reverse=True)

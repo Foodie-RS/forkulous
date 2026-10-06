@@ -33,7 +33,7 @@ from api.models import (
     SearchResponse,
     SearchResult,
     ShortParseResult,
-    UnitDictResult,
+    S2_UnitDict_Res,
 )
 from api.providers.density import Density, FallbackDensityProvider, UnitDensityProvider
 from api.providers.fdc_ingredient import (
@@ -58,6 +58,7 @@ from api.providers.pint_unit import (
     PintUnitNamesProvider,
     PintUnitProvider,
 )
+from api.providers.regression import DensityRegressionProvider, EmptyUnitRegrProvider, NonstandardUnitRegrProvider
 from api.providers.unit_aggregation import (
     S3_AggrDict_Prov,
     S4_DictFilter_Prov,
@@ -164,54 +165,37 @@ def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
         unit_corpus = json.load(f)
     def_search_params = SearchParams()
     ingr_prov = LocalFDCIngredientProvider(
-        _type=ProviderSearchResult,
         corpus=corpus,
         index=index,
         model_be=model_be,
         model_ce=model_ce
     )
-    nutri_prov = LocalFDCNutriProvider(
-        _type=Option[NutriSearchResult],
-        nutris=nutris_corpus,
-    )
+    nutri_prov = LocalFDCNutriProvider(nutris_corpus)
     empty_prov = FDCEmptyUnitProv(
-        _type=Option[EmptyUnitResult],
         unit_corpus=unit_corpus,
         unit_ranker=model_units,
     )
-    unit_prov = LocalFDCUnitDictProv(
-        _type=UnitDictResult,
-        unit_corpus=unit_corpus
-    )
-    fdc_names = FDCUnitNamesProv(
-        _type=S1_UnitNames_Res,
-        unit_corpus=unit_corpus
-    )
-    pint_nam_prov = PintUnitNamesProvider(
-        ureg=UREG
-    )
-    pint_prov = PintUnitProvider(
-        _type=UnitDictResult
-    )
-    fb_prov = FDCFbUnitProv(
-        _type=Option[FallbackUnitCandidate],
-        unit_corpus=unit_corpus
-    )
-    dense_prov = UnitDensityProvider(
-        _type=Option[Density]
-    )
-    fb_dense = FallbackDensityProvider(
-        _type=Density
-    )
+    unit_prov = LocalFDCUnitDictProv(unit_corpus)
+    fdc_names = FDCUnitNamesProv(unit_corpus)
+    pint_nam_prov = PintUnitNamesProvider(ureg=UREG)
+    pint_prov = PintUnitProvider()
+    fb_prov = FDCFbUnitProv(unit_corpus)
+    dense_prov = UnitDensityProvider()
+    fb_dense = FallbackDensityProvider()
+
+    dense_regression = DensityRegressionProvider("Forkulous/tf-forkulous-density")
+    empty_regression = EmptyUnitRegrProvider("Forkulous/tf-forkulous-empty-units")
+    unit_regression = NonstandardUnitRegrProvider("Forkulous/tf-forkulous-units")
+
 
     providers:dict[type[Any], list[Provider[Any]]|Provider[Any]] = {
         ProviderSearchResult:[ingr_prov],
         NutriSearchResult:[nutri_prov],
-        EmptyUnitResult:[empty_prov],
-        UnitDictResult:[pint_prov, unit_prov],
+        EmptyUnitResult:[empty_prov, empty_regression],
+        S2_UnitDict_Res:[pint_prov, unit_prov],
         S1_UnitNames_Res:[pint_nam_prov, fdc_names],
-        FallbackUnitCandidate:[fb_prov],
-        Density: [dense_prov, fb_dense]
+        FallbackUnitCandidate:[unit_regression, fb_prov],
+        Density: [dense_prov, dense_regression, fb_dense]
     }
 
     return SearchAPI(providers=providers,def_search_params=def_search_params, unit_ranker=model_units)

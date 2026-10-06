@@ -11,7 +11,7 @@ from api.models import (
     ParserState,
     PintUnitCandidate,
     S1_UnitNames_Res,
-    UnitDictResult,
+    S2_UnitDict_Res,
 )
 from api.state import Provider, RequestState
 
@@ -34,19 +34,22 @@ class PintUnitNamesProvider[T](Provider[S1_UnitNames_Res]):
     def execute(self, state: RequestState) -> S1_UnitNames_Res:
         return S1_UnitNames_Res(res=self.units)
 
-class PintUnitProvider(Provider[UnitDictResult]):
+class PintUnitProvider(Provider[S2_UnitDict_Res]):
+
+    def __init__(self):
+        super().__init__(S2_UnitDict_Res)
 
     @override
     def deferred(self) -> bool:
         return True
 
     @override
-    def execute(self, state:RequestState) -> UnitDictResult:
+    def execute(self, state:RequestState) -> S2_UnitDict_Res:
         logger = logging.getLogger("ingr_api").getChild("pint_provider")
         pstate = state.get(ParserState)
         if pstate.unit.is_none():
             logger.debug("No unit parsed, returning empty")
-            return UnitDictResult(res={})
+            return S2_UnitDict_Res(res={})
         unit = pstate.unit.unwrap()
         logger.debug(f"Looking up {unit}")
         ctx = pint.Context()
@@ -65,7 +68,7 @@ class PintUnitProvider(Provider[UnitDictResult]):
                 density_w = state.get_optional(Density)
                 if density_w.is_none():
                     logger.debug("No density available, skipping")
-                    return UnitDictResult(res={})
+                    return S2_UnitDict_Res(res={})
                 density = density_w.unwrap()
                 density_confidence = density.confidence
                 is_volume = True
@@ -88,11 +91,11 @@ class PintUnitProvider(Provider[UnitDictResult]):
                         density_confidence=density_confidence,
                         source="pint"
                     )
-                    return UnitDictResult(
+                    return S2_UnitDict_Res(
                         res={f"{pint_parsed}":[cand]}
                     )
         except pint.errors.UndefinedUnitError as e:
             logger.debug("Pint reported UndefinedUnitError:")
             logger.debug(e)
         logger.debug("Reporting no unit present.")
-        return UnitDictResult(res={})
+        return S2_UnitDict_Res(res={})

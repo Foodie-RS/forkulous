@@ -33,6 +33,19 @@ class LocalFDCIngredientProvider(IngredientProvider):
     model_ce:CrossEncoder
     index:Index
     corpus:dict[int,str]
+
+    def __init__(self,
+        model_be:SentenceTransformer,
+        model_ce:CrossEncoder,
+        index:Index,
+        corpus:dict[int,str]
+    ):
+        super().__init__(ProviderSearchResult)
+        self.model_be = model_be
+        self.model_ce = model_ce
+        self.index = index
+        self.corpus = corpus
+
     @override
     def execute(self, state:RequestState) -> ProviderSearchResult:
         logger = logging.getLogger("ingr_api").getChild("local_fdc").getChild("search_ingr")
@@ -68,6 +81,10 @@ class LocalFDCIngredientProvider(IngredientProvider):
 @dataclass
 class LocalFDCNutriProvider(NutriProvider):
     nutris:dict[str, Nutris]
+
+    def __init__(self, nutris:dict[str, Nutris]):
+        super().__init__(Option[NutriSearchResult])
+        self.nutris = nutris
 
     @override
     def execute(self, state: RequestState) -> Option[NutriSearchResult]:

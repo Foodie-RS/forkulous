@@ -15,7 +15,7 @@ from api.models import (
     S6_SemanticPrep_Res,
     TransientUnitSelectionResult,
     UnitCandidate,
-    UnitDictResult,
+    S2_UnitDict_Res,
 )
 from api.state import OptionalProvider, Provider, RequestState
 
@@ -35,13 +35,13 @@ class S6_SemanticPrep_Prov(Provider[S6_SemanticPrep_Res]):
         amnt = state.get(ParserState)
         topk = state.get(TransientUnitSelectionResult).res
 
-        prep = amnt.prep
-        if prep.is_none():
+        if amnt.prep.is_none():
             logger.warning("Called semantic prep search when prep was None")
             return S6_SemanticPrep_Res(
                 res=topk
             )
 
+        prep = amnt.prep.unwrap()
         candidates_new:list[tuple[UnitCandidate, float]] = []
 
         # create prompt
@@ -118,7 +118,10 @@ class S5_SelectUnits_Prov(OptionalProvider[S5_SelectUnits_Res]):
         topk = candidates[:10]
         if len(topk) > 1 and parse_state.prep.is_some() and (((candidates[1][1]) - (topk[1][1])) < UNIT_EPSILON):
             logger.debug("Ranking by preparation because multiple units qualify")
-            topk = state.get(S6_SemanticPrep_Res).res
+            state_msk = state.mask()
+            state_msk.set(TransientUnitSelectionResult, TransientUnitSelectionResult(res=topk))
+            topk = state_msk.get(S6_SemanticPrep_Res).res
+            state_msk.invalidate()
 
         #sort
         topk.sort(key=lambda it:it[1], reverse=True)
@@ -147,7 +150,7 @@ class S3_AggrDict_Prov(Provider[S3_AggrDict_Res]):
     def execute(self, state: RequestState) -> S3_AggrDict_Res:
         logger = logging.getLogger("ingr_api").getChild("AggrUnitDict")
         logger.debug("Aggregating results")
-        all_dicts = state.get_all(UnitDictResult, allow_deferred=True)
+        all_dicts = state.get_all(S2_UnitDict_Res, allow_deferred=True)
         logger.debug(f"Got {len(all_dicts)} result dicts, with a total of {sum(sum(len(it) for it in k.res.values()) for k in all_dicts)} entries")
         res:dict[str, list[UnitCandidate]] = {}
         for inner_res in all_dicts:

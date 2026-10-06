@@ -177,7 +177,7 @@ class UnitCandidate(metaclass=abc.ABCMeta):
         return False
 
 @dataclass
-class UnitDictResult:
+class S2_UnitDict_Res:
    res : dict[str,list[UnitCandidate]]
 
 @dataclass

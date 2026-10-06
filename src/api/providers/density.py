@@ -4,17 +4,20 @@ from typing import Any, override
 from pint import UnitRegistry
 
 from api.common import Option
-from api.models import Density, UnitCandidate, UnitDictResult
+from api.models import Density, UnitCandidate, S2_UnitDict_Res
 from api.state import OptionalProvider, Provider, RequestState
 
 GOOD_VOLUME_UNITS = {"cup", "cups", "cubic inch", "cubic inches", "quart", "quarts", "pint", "pints", "ml", "milliliter", "milliliters", "l", "liter", "liters"}
 
 class UnitDensityProvider(OptionalProvider[Density]):
 
+    def __init__(self):
+        super().__init__(Option[Density])
+
     @override
     def execute(self, state: RequestState) -> Option[Density]:
         logger = logging.getLogger("ingr_api").getChild("DefDensProv")
-        lst = state.get_all(UnitDictResult, allow_deferred=False)
+        lst = state.get_all(S2_UnitDict_Res, allow_deferred=False)
         dct_merged:dict[str, list[UnitCandidate]] = {}
         for it in lst:
             for k,v in it.res.items():
@@ -43,23 +46,9 @@ class UnitDensityProvider(OptionalProvider[Density]):
             logger.debug("No good volume units in unit dict")
             return Option.none()
 
-#class InferenceDensityProvider(DensityProvider):
-#    density_pipeline:UnitRegressionPipeline
-#    @override
-#    def get_density(self, ingr_parsed: str|None, comments:list[str]|None, context: RequestState) -> Density | None:
-#        logger = logging.getLogger("ingr_api").getChild("InfDenseProv")
-#        if ingr_parsed is None:
-#            logger.debug("Can't infer density because no ingredient was passed")
-#            return None
-#        logger.debug(f"Using inference to determine density of {ingr_parsed}")
-#        output:np.ndarray = self.density_pipeline.predict_one(comments=comments, food=ingr_parsed, unit=None)
-#        logger.debug(f"Got density: {output}")
-#        return Density(
-#            density=float(output),
-#            confidence=0
-#        )
-#
 class FallbackDensityProvider(Provider[Density]):
+    def __init__(self):
+        super().__init__(_type=Density)
     @override
     def execute(self, state: RequestState) -> Density:
         logger = logging.getLogger("ingr_api").getChild("FbDenseProv")
