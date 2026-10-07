@@ -6,14 +6,16 @@ from typing import Any, override
 
 import pint
 
+from api.common import Option
 from api.models import (
     Density,
     ParserState,
     PintUnitCandidate,
     S1_UnitNames_Res,
     S2_UnitDict_Res,
+    UnitCandidate,
 )
-from api.state import Provider, RequestState
+from api.state import OptionalProvider, Provider, RequestState
 
 PINT_EXCLUDE=["bag"]
 
@@ -34,22 +36,22 @@ class PintUnitNamesProvider[T](Provider[S1_UnitNames_Res]):
     def execute(self, state: RequestState) -> S1_UnitNames_Res:
         return S1_UnitNames_Res(res=self.units)
 
-class PintUnitProvider(Provider[S2_UnitDict_Res]):
+class PintUnitProvider(OptionalProvider[UnitCandidate]):
 
     def __init__(self):
-        super().__init__(S2_UnitDict_Res)
+        super().__init__(Option[UnitCandidate])
 
     @override
     def deferred(self) -> bool:
         return True
 
     @override
-    def execute(self, state:RequestState) -> S2_UnitDict_Res:
+    def execute(self, state:RequestState) -> Option[UnitCandidate]:
         logger = logging.getLogger("ingr_api").getChild("pint_provider")
         pstate = state.get(ParserState)
         if pstate.unit.is_none():
             logger.debug("No unit parsed, returning empty")
-            return S2_UnitDict_Res(res={})
+            return Option.none()
         unit = pstate.unit.unwrap()
         logger.debug(f"Looking up {unit}")
         ctx = pint.Context()
@@ -68,7 +70,7 @@ class PintUnitProvider(Provider[S2_UnitDict_Res]):
                 density_w = state.get_optional(Density)
                 if density_w.is_none():
                     logger.debug("No density available, skipping")
-                    return S2_UnitDict_Res(res={})
+                    return Option.none()
                 density = density_w.unwrap()
                 density_confidence = density.confidence
                 is_volume = True
@@ -91,11 +93,9 @@ class PintUnitProvider(Provider[S2_UnitDict_Res]):
                         density_confidence=density_confidence,
                         source="pint"
                     )
-                    return S2_UnitDict_Res(
-                        res={f"{pint_parsed}":[cand]}
-                    )
+                    return Option.some(cand)
         except pint.errors.UndefinedUnitError as e:
             logger.debug("Pint reported UndefinedUnitError:")
             logger.debug(e)
         logger.debug("Reporting no unit present.")
-        return S2_UnitDict_Res(res={})
+        return Option.none()

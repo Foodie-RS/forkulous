@@ -3,7 +3,7 @@ from __future__ import annotations
 import abc
 import json
 from dataclasses import dataclass
-from typing import Any, NamedTuple, override
+from typing import Any, NamedTuple, Self, override
 
 from pydantic import BaseModel
 
@@ -50,7 +50,7 @@ class ShortParseResult(BaseModel):
 class SearchParams(BaseModel):
     max_results_be:int=150
     max_results:int=3
-    exact:bool=True
+    fast:bool=True
     parse:bool=True
     semantic_cutoff:float=0.1
 
@@ -58,7 +58,7 @@ class SearchParams(BaseModel):
         return SearchParams(
             max_results_be=int(args.get("be_top_k", self.max_results_be)),
             max_results=int(args.get("ce_top_k", self.max_results)),
-            exact=(args.get("exact") == "true" or args.get("exact") == True) if "exact" in args else self.exact,
+            fast=(args.get("fast") == "true" or args.get("fast") == True) if "fast" in args else self.fast,
             parse=(args.get("parse") == "true" or args.get("parse") == True) if "parse" in args else self.parse,
         )
 
@@ -132,14 +132,14 @@ class NutriSearchResult:
 
 @dataclass
 class S5_SelectUnits_Res:
-   res:list[tuple[UnitCandidate, float]]
+    res:list[UnitCandidate]
 
 @dataclass
 class S6_SemanticPrep_Res:
-   res:list[tuple[UnitCandidate, float]]
+    res:list[UnitCandidate]
 @dataclass
 class TransientUnitSelectionResult:
-   res:list[tuple[UnitCandidate, float]]
+    res:list[UnitCandidate]
 @dataclass
 class S4_DictFilter_Res:
     res:list[tuple[UnitCandidate, float]]
@@ -158,7 +158,7 @@ class ParserState:
     prep:Option[str]
 
 
-@dataclass(frozen=True)
+@dataclass
 class UnitCandidate(metaclass=abc.ABCMeta):
     unit_name:str|None
     entry_id:int
@@ -168,13 +168,27 @@ class UnitCandidate(metaclass=abc.ABCMeta):
     gram_weight:float
     modifier:int|None
     source:str
+    score_modifier:float = 1.0
+    score_override:float|None=None
+
+    def relevance(self) -> float:
+        if self.score_override is not None:
+            return self.score_override
+        return self.initial_relevance() * self.score_modifier
 
     @abc.abstractmethod
-    def relevance(self) -> float:
+    def initial_relevance(self) -> float:
         return float("nan")
 
     def is_fallback(self) -> bool:
         return False
+
+    def set_score(self, score:float|None):
+        self.score_override = score
+
+    @abc.abstractmethod
+    def clone(self) -> UnitCandidate:
+        pass
 
 @dataclass
 class S2_UnitDict_Res:
@@ -190,29 +204,130 @@ class S1_UnitNames_Res:
 
 class FallbackUnitCandidate(UnitCandidate):
     @override
-    def relevance(self) -> float:
+    def initial_relevance(self) -> float:
         return 0.7
 
     @override
     def is_fallback(self) -> bool:
         return True
 
-@dataclass(frozen=True)
+    def clone(self) -> FallbackUnitCandidate:
+        return FallbackUnitCandidate(
+            unit_name=self.unit_name,
+            entry_id=self.entry_id,
+            comments=self.comments,
+            singular_name=self.singular_name,
+            plural_name=self.plural_name,
+            gram_weight=self.gram_weight,
+            modifier=self.modifier,
+            source=self.source,
+            score_modifier=self.score_modifier
+        )
+
+@dataclass(init=False)
 class PintUnitCandidate(UnitCandidate):
     density_confidence:float|None
+
+    def __init__(self,
+        unit_name:str|None,
+        entry_id:int,
+        comments:list[str],
+        singular_name:str|None,
+        plural_name:str|None,
+        gram_weight:float,
+        modifier:int|None,
+        source:str,
+        density_confidence:float|None,
+        score_modifier:float = 1.0
+    ):
+        super().__init__(
+            unit_name=unit_name,
+            entry_id=entry_id,
+            comments=comments,
+            singular_name=singular_name,
+            plural_name=plural_name,
+            gram_weight=gram_weight,
+            modifier=modifier,
+            source=source,
+            score_modifier=score_modifier
+        )
+        self.density_confidence = density_confidence
+
     @override
-    def relevance(self) -> float:
+    def initial_relevance(self) -> float:
         return 0.8 + (self.density_confidence * 0.2) if self.density_confidence is not None else 0.8
 
-@dataclass(frozen=True)
+    @override
+    def clone(self) -> PintUnitCandidate:
+        return PintUnitCandidate(
+            unit_name=self.unit_name,
+            entry_id=self.entry_id,
+            comments=self.comments,
+            singular_name=self.singular_name,
+            plural_name=self.plural_name,
+            gram_weight=self.gram_weight,
+            modifier=self.modifier,
+            source=self.source,
+            score_modifier=self.score_modifier,
+            density_confidence=self.density_confidence
+        )
+
+
+@dataclass(init=False)
 class IngredientUnitCandidate(UnitCandidate):
     ingredient_candidate:IngredientCandidate
     measure_unit_id:int|None
     seq_num:int
 
+    def __init__(self,
+        unit_name:str|None,
+        entry_id:int,
+        comments:list[str],
+        singular_name:str|None,
+        plural_name:str|None,
+        gram_weight:float,
+        modifier:int|None,
+        source:str,
+        ingredient_candidate:IngredientCandidate,
+        measure_unit_id:int|None,
+        seq_num:int,
+        score_modifier:float = 1.0
+    ):
+        super().__init__(
+            unit_name=unit_name,
+            entry_id=entry_id,
+            comments=comments,
+            singular_name=singular_name,
+            plural_name=plural_name,
+            gram_weight=gram_weight,
+            modifier=modifier,
+            source=source,
+            score_modifier=score_modifier
+        )
+        self.ingredient_candidate = ingredient_candidate
+        self.measure_unit_id=measure_unit_id
+        self.seq_num=seq_num
+
     @override
-    def relevance(self) -> float:
-        return self.ingredient_candidate.score
+    def initial_relevance(self) -> float:
+        return self.ingredient_candidate.score * self.score_modifier
+
+    @override
+    def clone(self) -> IngredientUnitCandidate:
+        return IngredientUnitCandidate(
+            unit_name=self.unit_name,
+            entry_id=self.entry_id,
+            comments=self.comments,
+            singular_name=self.singular_name,
+            plural_name=self.plural_name,
+            gram_weight=self.gram_weight,
+            modifier=self.modifier,
+            source=self.source,
+            score_modifier=self.score_modifier,
+            ingredient_candidate=self.ingredient_candidate,
+            measure_unit_id=self.measure_unit_id,
+            seq_num=self.seq_num
+        )
 
 class Density(NamedTuple):
     density:float

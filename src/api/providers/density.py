@@ -16,35 +16,24 @@ class UnitDensityProvider(OptionalProvider[Density]):
 
     @override
     def execute(self, state: RequestState) -> Option[Density]:
+        #TODO: search for all good volume units instead
         logger = logging.getLogger("ingr_api").getChild("DefDensProv")
-        lst = state.get_all(S2_UnitDict_Res, allow_deferred=False)
-        dct_merged:dict[str, list[UnitCandidate]] = {}
-        for it in lst:
-            for k,v in it.res.items():
-                inner_lst:list[UnitCandidate] = dct_merged.setdefault(k, [])
-                inner_lst.extend(v)
-        if len(dct_merged) == 0:
-            logger.debug("Unit dict empty, can't provide density")
-            return Option.none()
         ureg = state.get(UnitRegistry[Any])
         ml = ureg("ml")
         g = ureg("g")
-        intersect = GOOD_VOLUME_UNITS.intersection(dct_merged.keys())
-        logger.debug("Good Volume Units: [%s]", ", ".join(intersect))
-        if len(intersect) > 0:
-            # get item with maximum relevance
-            unit_name, unit = max([(k,outer[0]) for k,outer in dct_merged.items() if k in intersect], key=lambda a:a[1].relevance())
-            pint_unit = ureg(unit_name)
-            cnt = 1 * pint_unit
-            density = (unit.gram_weight * g) / cnt
-            density = density.to(g/ml)
-            return Option.some(Density(
-                confidence=unit.relevance(),
-                density=float(density.m)
-            ))
-        else:
-            logger.debug("No good volume units in unit dict")
-            return Option.none()
+        for unit in state.iter(UnitCandidate, resolve_deferred=False):
+            if unit.unit_name is not None and unit.unit_name.lower() in GOOD_VOLUME_UNITS:
+                logger.debug(f"Found good volume unit: {unit.unit_name.lower()}")
+                pint_unit = ureg(unit.unit_name)
+                cnt = 1 * pint_unit
+                density = (unit.gram_weight * g) / cnt
+                density = density.to(g/ml)
+                return Option.some(Density(
+                    confidence=unit.relevance(),
+                    density=float(density.m)
+                ))
+        logger.debug("No good volume units found!")
+        return Option.none()
 
 class FallbackDensityProvider(Provider[Density]):
     def __init__(self):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+from enum import Enum
 import logging
 import weakref
 from collections.abc import Generator
@@ -9,6 +10,7 @@ from threading import RLock
 from typing import Any, cast, get_origin, override
 
 from api.common import Option
+
 
 
 @dataclass
@@ -54,6 +56,7 @@ class Provider[T](metaclass=abc.ABCMeta):
     def __call__(self, state: RequestState) -> T:
         return self.execute(state)
 
+@dataclass
 class GeneratorProvider[T](metaclass=abc.ABCMeta):
     _type: type[T]
 
@@ -94,42 +97,64 @@ class _AggregatorState[T]:
     _values:list[T] = field(default_factory=list)
     _finished:bool=False
 
-    def new_iter(self) -> Generator[T, None, None]:
+    def new_iter(self, only_use_available:bool, continue_from:T|None) -> Generator[T, None, None]:
         logger = logging.getLogger("ing_api").getChild("AggrState")
+        if continue_from is not None and continue_from not in self._values:
+            logger.log(5, "Not yielding anything, as continue_from was not found in values.")
+            return
+        elif continue_from is not None:
+            ix = self._values.index(continue_from)
+            logger.log(5, "Continue value found. Continuing.")
+            yield from self._values[ix:]
+
         logger.debug(f"Yielding {len(self._values)} values")
         yield from self._values
         logger.debug(f"Done yielding {len(self._values)} values.")
+        if only_use_available and not self._finished:
+            logger.log(5, "Generator not exhausted, but only_use_available is true.")
+            return
         if not self._finished:
-            logger.debug("Generator not finished, continuing")
+            logger.log(5, "Generator not finished, continuing")
             for k in self._generator:
                 self._values.append(k)
                 yield k
             self._finished = True
+        else:
+            logger.log(5, "Generator already finished.")
 
     def is_finished(self) -> bool:
         return self._finished
+
+    def available(self) -> int:
+        return len(self._values)
 
 @dataclass
 class _AggregatorPromise[T]:
     _provider: GeneratorProvider[T]
     _state_map:weakref.WeakKeyDictionary[RequestState, _AggregatorState[T]] = field(default_factory=weakref.WeakKeyDictionary)
 
-    def new_iter(self, caller:RequestState, parents:list[RequestState], use_old:bool) -> Generator[T, None, None]:
+    def new_iter(self, caller:RequestState, parents:list[RequestState], use_old:bool, only_use_available:bool, continue_from:T|None) -> Generator[T, None, None]:
         logger = logging.getLogger("ing_api").getChild("AggrProm")
         if caller in self._state_map:
-            logger.debug("Yielding from existing aggregator")
-            yield from self._state_map[caller].new_iter()
+            logger.log(5, f"Yielding from existing aggregator for {self._provider._type}")
+            yield from self._state_map[caller].new_iter(only_use_available=only_use_available, continue_from=continue_from)
         elif use_old:
             logger.debug(f"Trying {len(parents)} parents")
             for ix, parent in enumerate(parents):
                 if parent in self._state_map:
-                    logger.debug(f"Yielding from owner's existing aggregator (depth: {ix+1})")
-                    yield from self._state_map[parent].new_iter()
+                    logger.log(5, f"Yielding from owner's existing aggregator (depth: {ix+1})")
+                    yield from self._state_map[parent].new_iter(only_use_available=only_use_available, continue_from=continue_from)
                     return
-        logger.debug("Creating new aggregator")
+        if only_use_available:
+            logger.log(5, "Requested only available values, so not creating a new aggregator")
+            return
+        if continue_from is not None:
+            logger.log(5, "Not creating new aggregator, as continue_after is not None and can't be in the new aggregator.")
+            return
+        logger.log(5, "Creating new aggregator")
         new_aggregator = _AggregatorState(_generator=self._provider.execute(caller))
         self._state_map[caller] = new_aggregator
-        yield from self._state_map[caller].new_iter()
+        yield from self._state_map[caller].new_iter(False, continue_from=continue_from)
 
     def move_from(self, child_state:RequestState, parent_state:RequestState, overwrite:bool=False, copy:bool=False):
         if child_state not in self._state_map:
@@ -141,6 +166,16 @@ class _AggregatorPromise[T]:
         self._state_map[parent_state] = self._state_map[child_state]
         if not copy:
             _ = self._state_map.pop(child_state)
+
+    def count_available(self, caller:RequestState, parents:list[RequestState], use_old:bool) -> int:
+        count = 0
+        if caller in self._state_map:
+            count += self._state_map[caller].available()
+        if use_old:
+            for parent in parents:
+                if parent in self._state_map:
+                    count += self._state_map[parent].available()
+        return count
 
     def clone(self) -> _AggregatorPromise[T]:
         return _AggregatorPromise(_provider=self._provider)
@@ -158,10 +193,10 @@ class _StorePromise[T]:
     def set(self, state:RequestState, val:Option[T]):
         self._state_map[state] = val
 
-    def is_available(self, state:RequestState) -> bool:
-        return state in self._state_map
+    def is_available(self, state:RequestState, parents:list[RequestState], use_old:bool) -> bool:
+        return state in self._state_map or (use_old and len(set(self._state_map.keys()).intersection(parents)) > 0)
 
-    def get(self, caller: RequestState, allow_deferred:bool, parents:list[RequestState], use_old:bool) -> Option[T]:
+    def get(self, caller: RequestState, allow_deferred:bool, parents:list[RequestState], use_old:bool, only_available:bool) -> Option[T]:
         logger = logging.getLogger("ing_api").getChild("StoreProm")
         if caller in self._state_map:
             return self._state_map[caller]
@@ -172,6 +207,10 @@ class _StorePromise[T]:
                     logger.log(5, f"Value found (depth {ix+1})")
                     return self._state_map[parent]
         if self._provider.deferred() and not allow_deferred:
+            logger.log(5, "Provider is deferred and allow_deferred is false, so not calling provider.")
+            return Option.none()
+        if only_available:
+            logger.log(5, "Requested only available values. Value is not available.")
             return Option.none()
         if isinstance(self._provider, OptionalProvider):
             res = cast(Option[T], self._provider(caller))
@@ -197,6 +236,8 @@ class _StorePromise[T]:
     def clone(self) -> _StorePromise[T]:
         return _StorePromise(_provider=self._provider)
 
+type FromProviderType[T]=type[Provider[T]|GeneratorProvider[T]|OptionalProvider[T]]|None
+
 class RootState:
     _store: dict[type[Any], list[_StorePromise[Any]|_AggregatorPromise[Any]]]
     _lock: RLock
@@ -211,6 +252,20 @@ class RootState:
             if not isinstance(item, origin):
                 raise TypeError("Item is not instance of key class")
             self.add_provider(key, ValueProvider[T](typ=origin, value=item, owner=caller), insert)
+
+    def count_available[T](self, caller:RequestState, what:type[T], use_old:bool) -> int:
+        if what not in self._store:
+            return 0
+        count = 0
+        with self._lock:
+            parents = caller.get_parents()
+            for prom in self._store[what]:
+                if isinstance(prom, _AggregatorPromise):
+                    count += prom.count_available(caller, parents, use_old)
+                else:
+                    count += 1 if prom.is_available(caller, parents, use_old) else 0
+            return count
+
 
     def add_provider[T](
         self,
@@ -236,20 +291,41 @@ class RootState:
                 logger.log(5, f"Inserting provider for {key} (origin: {origin})")
                 lst.insert(0, prom)
 
-    def iter[T](self, what:type[T], resolve_deferred:bool, caller:RequestState, use_old:bool=True) -> Generator[T, None, None]:
+    def iter[T](self, what:type[T], resolve_deferred:bool, caller:RequestState, use_old:bool, only_use_available:bool, from_provider:FromProviderType[T], continue_after:T|None) -> Generator[T, None, None]:
         logger = logging.getLogger("ingr_api").getChild("RootState").getChild("iter")
         parents = caller.get_parents()
+        skipping=continue_after is not None
         with self._lock:
             if what in self._store:
                 lst:list[_StorePromise[T]|_AggregatorPromise[T]] = cast(list[_StorePromise[T]|_AggregatorPromise[T]], self._store[what])
                 logger.log(5, f"Found {len(lst)} promises for {what}, yielding (state depth: {len(parents)})...")
                 for prom in lst:
+                    if from_provider is not None and not isinstance(prom._provider, from_provider):
+                        logger.log(5, f"Skipping promise from {prom._provider.__class__}, because it is not the requested provider.")
+                        continue
                     if isinstance(prom, _AggregatorPromise):
-                        yield from prom.new_iter(caller, parents, use_old)
+                        logger.log(5, "Yielding from aggregator")
+                        if not skipping:
+                            yield from prom.new_iter(caller, parents, use_old, only_use_available, continue_from=None)
+                        else:
+                            iter = prom.new_iter(caller, parents, use_old, only_use_available, continue_from=continue_after)
+                            item = next(iter, None)
+                            if item is not None:
+                                if item != continue_after:
+                                    raise ValueError("The item yielded by the generator is not the expected item!")
+                                skipping = False
+                                yield from iter
                     else:
-                        res = prom.get(caller, resolve_deferred, parents, use_old)
-                        if res.is_some():
-                            yield res.unwrap()
+                        logger.log(5, "Calling StorePromise")
+                        if skipping:
+                            res = prom.get(caller, resolve_deferred, parents, use_old, only_available=True)
+                            if res.is_some_and(lambda k:k == continue_after):
+                                logger.log(5, "Found continue_after value. Continuing as normal.")
+                                skipping = False
+                        else:
+                            res = prom.get(caller, resolve_deferred, parents, use_old, only_use_available)
+                            if res.is_some():
+                                yield res.unwrap()
             else:
                 logger.log(5, f"Found no promises for {what}.")
 
@@ -293,13 +369,16 @@ class RequestState:
         self.assert_not_masked()
         self._root.set(key, item, self, insert)
 
-    def iter[T](self, what:type[T], resolve_deferred:bool=True, use_old:bool=True) -> Generator[T, None, None]:
+    def iter[T](self, what:type[T], resolve_deferred:bool=True, use_old:bool=True, only_use_available:bool=False, from_provider:FromProviderType[T]=None, continue_after:T|None=None) -> Generator[T, None, None]:
         self.assert_valid()
-        return self._root.iter(what, resolve_deferred, self, use_old)
+        return self._root.iter(what, resolve_deferred, self, use_old=use_old, only_use_available=only_use_available, from_provider=from_provider, continue_after=continue_after)
 
-    def get_optional[T](self, what: type[T], resolve_deferred:bool=True) -> Option[T]:
+    def count_available[T](self, what:type[T], use_old:bool=True) -> int:
+        return self._root.count_available(self, what, use_old)
+
+    def get_optional[T](self, what: type[T], resolve_deferred:bool=True, allow_parent:bool=True, only_use_available:bool=False, from_provider:FromProviderType[T]=None, continue_after:T|None=None) -> Option[T]:
         self.assert_valid()
-        nxt = next(self.iter(what, resolve_deferred), None)
+        nxt = next(self.iter(what, resolve_deferred=resolve_deferred, use_old=allow_parent, only_use_available=only_use_available, from_provider=from_provider, continue_after=continue_after), None)
         return Option.some(nxt) if nxt is not None else Option.none()
 
     def invalidate(self):
@@ -383,13 +462,13 @@ class RequestState:
         self._child = weakref.ref(new_state)
         return new_state
 
-    def get[T](self, what: type[T], allow_deferred:bool=False) -> T:
+    def get[T](self, what: type[T], allow_deferred:bool=False, continue_after:T|None=None) -> T:
         self.assert_valid()
-        nxt = next(self.iter(what, allow_deferred), None)
+        nxt = next(self.iter(what, allow_deferred, continue_after=continue_after), None)
         if nxt is None:
             raise ValueError(f"State contains no values of type {what}!")
         return nxt
 
-    def get_all[T](self, what: type[T], allow_deferred:bool=False) -> list[T]:
+    def get_all[T](self, what: type[T], allow_deferred:bool=False, allow_parent:bool=True, only_use_available:bool=False, from_provider:FromProviderType[T]=None) -> list[T]:
         self.assert_valid()
-        return [k for k in self.iter(what, allow_deferred)]
+        return [k for k in self.iter(what, allow_deferred, use_old=allow_parent, only_use_available=only_use_available, from_provider=from_provider)]

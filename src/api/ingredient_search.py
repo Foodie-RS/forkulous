@@ -19,6 +19,7 @@ from api.common import Option
 from api.models import (
     EmptyUnitResult,
     FallbackUnitCandidate,
+    IngredientCandidate,
     Nutris,
     NutriSearchResult,
     ParseResults,
@@ -34,6 +35,7 @@ from api.models import (
     SearchResult,
     ShortParseResult,
     S2_UnitDict_Res,
+    UnitCandidate,
 )
 from api.providers.density import Density, FallbackDensityProvider, UnitDensityProvider
 from api.providers.fdc_ingredient import (
@@ -44,6 +46,7 @@ from api.providers.fdc_units import (
     FDCEmptyUnitProv,
     FDCFbUnitProv,
     FDCUnitNamesProv,
+    FDCUnitProvider,
     LocalFDCUnitDictProv,
 )
 from api.providers.ingredient_search import (
@@ -60,12 +63,9 @@ from api.providers.pint_unit import (
 )
 from api.providers.regression import DensityRegressionProvider, EmptyUnitRegrProvider, NonstandardUnitRegrProvider
 from api.providers.unit_aggregation import (
-    S3_AggrDict_Prov,
-    S4_DictFilter_Prov,
     S5_SelectUnits_Prov,
-    S6_SemanticPrep_Prov,
 )
-from api.state import OptionalProvider, Provider, RequestState, RootState
+from api.state import GeneratorProvider, OptionalProvider, Provider, RequestState, RootState
 
 BE_DEF_Q_PROMPT = "ingredient: "
 BE_DEF_D_PROMPT = "usda: "
@@ -79,17 +79,14 @@ class SearchAPI:
     def_search_params:SearchParams
     default_state:RootState
 
-    def __init__(self, providers:dict[type[Any], list[Provider[Any]]|Provider[Any]], unit_ranker:SentenceTransformer, def_search_params:SearchParams):
+    def __init__(self, providers:dict[type[Any], list[Provider[Any]|GeneratorProvider[Any]]|Provider[Any]|GeneratorProvider[Any]], unit_ranker:SentenceTransformer, def_search_params:SearchParams):
         self.def_search_params = def_search_params
         state = RootState()
         state.add_provider(ParsedIngredient, ParserProvider(_type=ParsedIngredient))
         state.add_provider(ParseResults, ParseResultProvider(_type=ParseResults))
         state.add_provider(ShortParseResult, ShortParseResultProvider(_type=ShortParseResult))
         state.add_provider(SearchResult, IngredientSearchProvider(_type=SearchResult))
-        state.add_provider(S6_SemanticPrep_Res, S6_SemanticPrep_Prov(_type=S6_SemanticPrep_Res, unit_ranker=unit_ranker))
         state.add_provider(S5_SelectUnits_Res, S5_SelectUnits_Prov(_type=Option[S5_SelectUnits_Res]))
-        state.add_provider(S3_AggrDict_Res, S3_AggrDict_Prov(_type=S3_AggrDict_Res))
-        state.add_provider(S4_DictFilter_Res, S4_DictFilter_Prov(_type=Option[S4_DictFilter_Res], unit_ranker=unit_ranker))
         for cls, prov in providers.items():
             if isinstance(prov, list):
                 for inner_prov in prov:
@@ -174,9 +171,9 @@ def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
     nutri_prov = LocalFDCNutriProvider(nutris_corpus)
     empty_prov = FDCEmptyUnitProv(
         unit_corpus=unit_corpus,
-        unit_ranker=model_units,
     )
-    unit_prov = LocalFDCUnitDictProv(unit_corpus)
+    #TOOD replace CE with argument
+    unit_prov = FDCUnitProvider(unit_corpus, CrossEncoder("cross-encoder/ms-marco-MiniLM-L6-v2"))
     fdc_names = FDCUnitNamesProv(unit_corpus)
     pint_nam_prov = PintUnitNamesProvider(ureg=UREG)
     pint_prov = PintUnitProvider()
@@ -189,11 +186,11 @@ def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
     unit_regression = NonstandardUnitRegrProvider("Forkulous/tf-forkulous-units")
 
 
-    providers:dict[type[Any], list[Provider[Any]]|Provider[Any]] = {
-        ProviderSearchResult:[ingr_prov],
+    providers:dict[type[Any], list[Provider[Any]|GeneratorProvider[Any]]|Provider[Any]|GeneratorProvider[Any]] = {
+        IngredientCandidate:[ingr_prov],
         NutriSearchResult:[nutri_prov],
         EmptyUnitResult:[empty_prov, empty_regression],
-        S2_UnitDict_Res:[pint_prov, unit_prov],
+        UnitCandidate:[unit_prov, pint_prov],
         S1_UnitNames_Res:[pint_nam_prov, fdc_names],
         FallbackUnitCandidate:[unit_regression, fb_prov],
         Density: [dense_prov, dense_regression, fb_dense]

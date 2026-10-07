@@ -105,7 +105,7 @@ class ParseResultProvider(Provider[ParseResults]):
                     score = new_unit.relevance()
                     if best_score < score:
                         best_score = score
-                        best_selected_units = [(new_unit, score)]
+                        best_selected_units = [new_unit]
                         best_amount = amnt
                         best_inner_amount = actual_amount
                         best_parsed_unit = Option.none()
@@ -114,10 +114,10 @@ class ParseResultProvider(Provider[ParseResults]):
                     logger.debug("Unit Parsing: Looking up inner unit: %s", amnt.unit)
                     selected_units = state_msk.get(S5_SelectUnits_Res).res
 
-                    logger.debug("Got units: [%s]", ", ".join([x[0].unit_name or "<null>" for x in selected_units]))
+                    logger.debug("Got units: [%s]", ", ".join([x.unit_name or "<null>" for x in selected_units]))
                     selected_units = selected_units[:3]
-                    if len(selected_units) > 0 and best_score < selected_units[0][1]:
-                        best_score = selected_units[0][1]
+                    if len(selected_units) > 0 and best_score < selected_units[0].relevance():
+                        best_score = selected_units[0].relevance()
                         best_selected_units = selected_units
                         best_amount = amnt
                         best_inner_amount = 1 if amnt.quantity == "" else float(amnt.quantity)
@@ -127,7 +127,7 @@ class ParseResultProvider(Provider[ParseResults]):
             actual_amount = 1
             logger.debug("No amount found, defaulting to 1")
             def_unit = state.get(FallbackUnitCandidate)
-            best_selected_units = [(def_unit, None)]
+            best_selected_units = [def_unit]
             best_amount = None
             best_inner_amount = 1.0
             best_parsed_unit = Option.none()
@@ -144,11 +144,11 @@ class ParseResultProvider(Provider[ParseResults]):
                 outer_amount=outer_amount,
                 confidence=None if not best_amount else best_amount.confidence,
                 resolved_units=[UnitModel(
-                    name=it[0].unit_name or "",
-                    comments=it[0].comments,
-                    source=it[0].source,
-                    relevance=it[1],
-                    gram_weight=it[0].gram_weight
+                    name=it.unit_name or "",
+                    comments=it.comments,
+                    source=it.source,
+                    relevance=it.relevance(),
+                    gram_weight=it.gram_weight
                 ) for it in best_selected_units
                 ]
             )

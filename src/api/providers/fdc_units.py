@@ -1,26 +1,49 @@
+from collections.abc import Generator
+import math
+import numpy as np
 import logging
 from dataclasses import dataclass
 from typing import Any, cast, override
 
-from sentence_transformers import SentenceTransformer
+from pandas.io.common import is_bool
+from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from api.common import Option
 from api.models import (
     EmptyUnitResult,
     FallbackUnitCandidate,
+    IngredientCandidate,
     IngredientUnitCandidate,
     ParserState,
     S1_UnitNames_Res,
     UnitCandidate,
     S2_UnitDict_Res,
 )
-from api.providers.fdc_ingredient import FDCCandidates
+from api.providers.fdc_ingredient import FDCCandidates, LocalFDCIngredientProvider
 from api.providers import unit_aggregation
-from api.state import OptionalProvider, Provider, RequestState
+from api.state import GeneratorProvider, OptionalProvider, Provider, RequestState
 
 SERVING_MEASURE_UNITS = [1036,1049,1059,1069,1071,1096]
 ITEM_MEASURE_UNITS = list(range(1013,1030)) + list(range(1031, 1038)) + list(range(1039,1049)) + list(range(1050,1059)) + [1060] + list(range(1063,1069)) + [1070] + list(range(1072,1121))
 ITEM_NAMES=["fruit", "piece", ""]
+MIN_UNIT_RESULTS=10
+UNIT_INGR_CUTOFF=0.5
+
+type _CorpusType=dict[str, list[dict[Any, Any]]]
+
+def _collect_candidates(state:RequestState, corpus:_CorpusType) -> list[IngredientCandidate]:
+    avail = [k for k in state.get_all(IngredientCandidate, only_use_available=True, from_provider=LocalFDCIngredientProvider) if k.score > UNIT_INGR_CUTOFF and k.id in corpus and len(corpus[k.id]) > 0]
+    if len(avail) >= MIN_UNIT_RESULTS:
+        avail.sort(key=lambda k:k.score, reverse=True)
+        return avail
+    for k in state.iter(IngredientCandidate, from_provider=LocalFDCIngredientProvider):
+        if k in avail or k.score <= UNIT_INGR_CUTOFF or (k.id not in corpus) or (len(corpus[k.id]) == 0):
+            continue
+        avail.append(k)
+        if len(avail) >= MIN_UNIT_RESULTS:
+            break
+    avail.sort(key=lambda k:k.score, reverse=True)
+    return avail
 
 def _cmp(items:list[tuple[Any, Any, bool]]):
     """
@@ -37,7 +60,7 @@ def _cmp(items:list[tuple[Any, Any, bool]]):
 
 @dataclass
 class FDCUnitNamesProv(Provider[S1_UnitNames_Res]):
-    unit_corpus:dict[str, list[dict[Any, Any]]]
+    unit_corpus:_CorpusType
 
     def __init__(self,unit_corpus:dict[str, list[dict[Any, Any]]]):
         super().__init__(S1_UnitNames_Res)
@@ -46,8 +69,8 @@ class FDCUnitNamesProv(Provider[S1_UnitNames_Res]):
     @override
     def execute(self, state: RequestState) -> S1_UnitNames_Res:
         names:dict[str, str] = {}
-        fdc_candidates = state.get(FDCCandidates)
-        for cand in fdc_candidates.values():
+        fdc_candidates = _collect_candidates(state, self.unit_corpus)
+        for cand in fdc_candidates:
             units = self.unit_corpus[cand.id]
             for unit in units:
                 if unit["unit_name"] != "":
@@ -55,8 +78,52 @@ class FDCUnitNamesProv(Provider[S1_UnitNames_Res]):
         return S1_UnitNames_Res(res=names)
 
 @dataclass
+class FDCUnitProvider(GeneratorProvider[UnitCandidate]):
+    unit_corpus:_CorpusType
+    unit_ranker:CrossEncoder
+    use_sigmoid:bool=True
+
+    def __init__(self, unit_corpus:_CorpusType, unit_ranker:CrossEncoder, use_sigmoid:bool=True):
+        super().__init__(_type=UnitCandidate)
+        self.unit_corpus = unit_corpus
+        self.unit_ranker = unit_ranker
+        self.use_sigmoid = use_sigmoid
+
+    @override
+    def execute(self, state: RequestState) -> Generator[UnitCandidate, None, None]:
+        logger = logging.getLogger("ingr_api").getChild("FDCUnits")
+        #TODO add case for fast=False
+        rejects:list[IngredientUnitCandidate] = []
+        pstate = state.get(ParserState)
+        if pstate.unit.is_none_or(lambda k:len(k) == 0):
+            logger.warning("ParserState.unit was empty, but FDCUnitProvider was called!")
+            return
+        unit_parse = pstate.unit.unwrap()
+        for ingr in state.iter(IngredientCandidate, from_provider=LocalFDCIngredientProvider):
+            if ingr.score <= UNIT_INGR_CUTOFF or (ingr.id not in self.unit_corpus) or (len(self.unit_corpus[ingr.id]) == 0):
+                continue
+            for unit in self.unit_corpus[ingr.id]:
+                unit_cand = _unit(unit, ingr)
+                if unit_parse.lower() in [k.lower() for k in [unit_cand.singular_name, unit_cand.plural_name, unit_cand.unit_name] if k is not None]:
+                    logger.debug("Suitable unit found, yielding")
+                    yield unit_cand
+                else:
+                    rejects.append(unit_cand)
+        for it in rejects:
+            logger.debug("Yielding CE-ranked units...")
+            if it.unit_name is None or len(it.unit_name) > 0:
+                continue
+            logit_score = self.unit_ranker.predict((unit_parse, it.unit_name), convert_to_numpy=True)
+            if self.use_sigmoid:
+                logit_score = 1 / (1 + math.exp(-logit_score))
+            score = float(logit_score)
+            it.score_modifier = 0.5 + (0.5 * score)
+            if it.relevance() > UNIT_INGR_CUTOFF:
+                yield it
+
+@dataclass
 class LocalFDCUnitDictProv(Provider[S2_UnitDict_Res]):
-    unit_corpus:dict[str, list[dict[Any, Any]]]
+    unit_corpus:_CorpusType
 
     def __init__(self, unit_corpus:dict[str, list[dict[Any,Any]]]):
         super().__init__(S2_UnitDict_Res)
@@ -111,16 +178,27 @@ class LocalFDCUnitDictProv(Provider[S2_UnitDict_Res]):
         logger.debug(f"Got a total of {len(units)} units.")
         return S2_UnitDict_Res(res=units)
 
-def _get_default(unit_ranker:SentenceTransformer, crps:dict[str, list[dict[Any, Any]]], state:RequestState) -> Option[UnitCandidate]:
+def _unit(unit_json:dict[str, Any], cand:IngredientCandidate) -> IngredientUnitCandidate:
+    return IngredientUnitCandidate(
+        measure_unit_id=unit_json["measure_unit_id"],
+        ingredient_candidate=cand,
+        comments=unit_json["comments"],
+        modifier=unit_json["modifier"],
+        entry_id=unit_json["entry_id"],
+        gram_weight=unit_json["gram_weight"],
+        plural_name=unit_json["plural_name"],
+        singular_name=unit_json["singular_name"],
+        seq_num=unit_json["seq_num"],
+        unit_name=unit_json["unit_name"],
+        source=unit_json["source"]
+    )
+
+
+def _get_default(crps:_CorpusType, state:RequestState) -> Option[UnitCandidate]:
     logger = logging.getLogger("ingr_api").getChild("_get_def_un")
-    cand = state.get(FDCCandidates)
-    cnd_sorted = list(cand.values())
-    cnd_sorted.sort(key=lambda k: k.score, reverse=True)
-    logger.debug(f"Got {len(cnd_sorted)} candidates")
-    for candidate in cnd_sorted:
-        #TODO make this a static const variable
-        if candidate.score < 0.2:
-            continue
+    candidates = _collect_candidates(state, crps)
+    logger.debug(f"Got {len(candidates)} candidates")
+    for candidate in candidates:
         logger.debug(f"Looking up {candidate.description}")
         if str(candidate.id) in crps:
             units = list(crps[str(candidate.id)])
@@ -129,44 +207,43 @@ def _get_default(unit_ranker:SentenceTransformer, crps:dict[str, list[dict[Any, 
             units.sort(key=lambda it:it["seq_num"])
             unit = units[0]
             logger.debug(f"Returning {unit['unit_name']} because it has the lowest seq_num")
-            return Option.some(IngredientUnitCandidate(
-                measure_unit_id=unit["measure_unit_id"],
-                ingredient_candidate=candidate,
-                comments=unit["comments"],
-                modifier=unit["modifier"],
-                entry_id=unit["entry_id"],
-                gram_weight=unit["gram_weight"],
-                plural_name=unit["plural_name"],
-                singular_name=unit["singular_name"],
-                seq_num=unit["seq_num"],
-                unit_name=unit["unit_name"],
-                source=unit["source"]
-            ))
+            return Option.some(_unit(unit, candidate))
     logger.debug("No units, looking up `serving`")
-    #TODO maybe generalize this more? "serving" may be too narrow?
-    res = unit_aggregation.find_unit_in_dict(state, "serving", unit_ranker)
-    if len(res) == 0:
-        logger.debug("No `serving` found.")
+    pstate = state.get(ParserState)
+    if pstate.unit.is_some_and(lambda k:len(k) > 0):
+        logger.debug("Unit not empty, not looking up serving to avoid infinite recursion")
         return Option.none()
-    elif res[0][1] < 0.5:
+    pstate_mod = ParserState(
+        parsed_name=pstate.parsed_name,
+        unit=Option.some("serving"),
+        quantity=pstate.quantity,
+        prep=pstate.prep
+    )
+    state_msk = state.mask()
+    state_msk.set(ParserState, pstate_mod)
+    candi = state_msk.get_optional(UnitCandidate, allow_parent=False) #TODO set from_provider to new provider
+    state_msk.invalidate()
+    if candi.is_none_or(lambda k: isinstance(k, FallbackUnitCandidate)):
+        logger.debug("Refusing to use fallback unit candidate")
+        return Option.none()
+    candi_uw = candi.unwrap()
+    if candi_uw.relevance() < 0.5:
         logger.debug("Score too low, returning None")
         return Option.none()
     else:
-        return Option.some(res[0][0])
+        return candi
 
 @dataclass
 class FDCEmptyUnitProv(OptionalProvider[EmptyUnitResult]):
-    unit_corpus:dict[str, list[dict[Any, Any]]]
-    unit_ranker:SentenceTransformer
+    unit_corpus:_CorpusType
 
-    def __init__(self, unit_corpus:dict[str, list[dict[Any, Any]]], unit_ranker:SentenceTransformer):
+    def __init__(self, unit_corpus:_CorpusType):
         super().__init__(Option[EmptyUnitResult])
-        self.unit_ranker = unit_ranker
         self.unit_corpus = unit_corpus
 
     @override
     def execute(self, state:RequestState) -> Option[EmptyUnitResult]:
-        res = _get_default(self.unit_ranker, self.unit_corpus, state)
+        res = _get_default(self.unit_corpus, state)
         return res.map(lambda res:EmptyUnitResult(res=res, confidence=res.relevance()))
 
 
@@ -175,7 +252,7 @@ class FDCFbUnitProv(OptionalProvider[FallbackUnitCandidate]):
     units:dict[str, FallbackUnitCandidate]
     name_eq:dict[str, str]
 
-    def __init__(self, unit_corpus:dict[str, list[dict[Any, Any]]]):
+    def __init__(self, unit_corpus:_CorpusType):
         super().__init__(Option[FallbackUnitCandidate])
         self.name_eq = {}
         units: dict[str, list[dict[Any, Any]]]= {}

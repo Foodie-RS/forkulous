@@ -40,6 +40,7 @@ Turning meatsack-produced recipes into information that a computer can understan
 - Functions/classes that can provide something (Forkulous calls them `Provider`s) need to be registered so that the pipeline knows to use them.
 - The pipeline stores all data that has been fetched/generated during every request in a single object called `RequestState`. Notably, it also stores all `Provider`s, which MIGHT produce data in the future.
 - `RequestState` is essentially a wrapper for a dictionary. Use `.get(name)` (where `name` is the name of the class you want to fetch) to access it. For instance, you can do `.get(Density)` to get the Density of the item in the current request.
+- The execution is lazy: if no `Provider` requests `Density`, the provider for `Density` will not be called.
 - If you call `.get()` for some class that is registered, but whose `Provider` has not been executed yet, `RequestState` will automatically execute it (and, notably, cache it) under the hood, before returning to your program.
 - **Subsequent calls to `.get()` for the same class on the same `RequestState` will return the cached result without re-execution of the `Provider`.**
 - Forkulous does everything with the state object. For instance, the main API method is essentially just 3 lines of code:
