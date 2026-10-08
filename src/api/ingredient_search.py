@@ -25,6 +25,7 @@ from api.models import (
     ParseResults,
     ProviderSearchResult,
     S1_UnitNames_Res,
+    S2_UnitDict_Res,
     S3_AggrDict_Res,
     S4_DictFilter_Res,
     S5_SelectUnits_Res,
@@ -34,7 +35,6 @@ from api.models import (
     SearchResponse,
     SearchResult,
     ShortParseResult,
-    S2_UnitDict_Res,
     UnitCandidate,
 )
 from api.providers.density import Density, FallbackDensityProvider, UnitDensityProvider
@@ -47,7 +47,6 @@ from api.providers.fdc_units import (
     FDCFbUnitProv,
     FDCUnitNamesProv,
     FDCUnitProvider,
-    LocalFDCUnitDictProv,
 )
 from api.providers.ingredient_search import (
     IngredientSearchProvider,
@@ -61,11 +60,21 @@ from api.providers.pint_unit import (
     PintUnitNamesProvider,
     PintUnitProvider,
 )
-from api.providers.regression import DensityRegressionProvider, EmptyUnitRegrProvider, NonstandardUnitRegrProvider
+from api.providers.regression import (
+    DensityRegressionProvider,
+    EmptyUnitRegrProvider,
+    NonstandardUnitRegrProvider,
+)
 from api.providers.unit_aggregation import (
     S5_SelectUnits_Prov,
 )
-from api.state import GeneratorProvider, OptionalProvider, Provider, RequestState, RootState
+from api.state import (
+    GeneratorProvider,
+    OptionalProvider,
+    Provider,
+    RequestState,
+    RootState,
+)
 
 BE_DEF_Q_PROMPT = "ingredient: "
 BE_DEF_D_PROMPT = "usda: "
@@ -181,9 +190,9 @@ def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
     dense_prov = UnitDensityProvider()
     fb_dense = FallbackDensityProvider()
 
-    dense_regression = DensityRegressionProvider("Forkulous/tf-forkulous-density")
-    empty_regression = EmptyUnitRegrProvider("Forkulous/tf-forkulous-empty-units")
-    unit_regression = NonstandardUnitRegrProvider("Forkulous/tf-forkulous-units")
+    dense_regression = DensityRegressionProvider("Forkulous/tf-forkulous-dense-xs")
+    empty_regression = EmptyUnitRegrProvider("Forkulous/tf-forkulous-empty-units-xs")
+    unit_regression = NonstandardUnitRegrProvider("Forkulous/tf-forkulous-units-xs")
 
 
     providers:dict[type[Any], list[Provider[Any]|GeneratorProvider[Any]]|Provider[Any]|GeneratorProvider[Any]] = {

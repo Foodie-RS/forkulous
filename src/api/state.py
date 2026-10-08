@@ -98,15 +98,7 @@ class _AggregatorState[T]:
     _finished:bool=False
 
     def new_iter(self, only_use_available:bool, continue_from:T|None) -> Generator[T, None, None]:
-        logger = logging.getLogger("ing_api").getChild("AggrState")
-        if continue_from is not None and continue_from not in self._values:
-            logger.log(5, "Not yielding anything, as continue_from was not found in values.")
-            return
-        elif continue_from is not None:
-            ix = self._values.index(continue_from)
-            logger.log(5, "Continue value found. Continuing.")
-            yield from self._values[ix:]
-
+        logger = logging.getLogger("ingr_api").getChild("AggrState")
         logger.debug(f"Yielding {len(self._values)} values")
         yield from self._values
         logger.debug(f"Done yielding {len(self._values)} values.")
@@ -138,6 +130,7 @@ class _AggregatorPromise[T]:
         if caller in self._state_map:
             logger.log(5, f"Yielding from existing aggregator for {self._provider._type}")
             yield from self._state_map[caller].new_iter(only_use_available=only_use_available, continue_from=continue_from)
+            return
         elif use_old:
             logger.debug(f"Trying {len(parents)} parents")
             for ix, parent in enumerate(parents):
@@ -147,9 +140,6 @@ class _AggregatorPromise[T]:
                     return
         if only_use_available:
             logger.log(5, "Requested only available values, so not creating a new aggregator")
-            return
-        if continue_from is not None:
-            logger.log(5, "Not creating new aggregator, as continue_after is not None and can't be in the new aggregator.")
             return
         logger.log(5, "Creating new aggregator")
         new_aggregator = _AggregatorState(_generator=self._provider.execute(caller))
@@ -294,10 +284,7 @@ class RootState:
 
     def iter[T](self, what:type[T], resolve_deferred:bool, caller:RequestState, use_parent:bool, only_use_available:bool, from_provider:FromProviderType[T], continue_after:T|None, round_robin:bool) -> Generator[T, None, None]:
         logger = logging.getLogger("ingr_api").getChild("RootState").getChild("iter")
-        if round_robin and (continue_after is not None):
-            raise ValueError("Can't use continue_after and round_robin at the same time!")
         parents = caller.get_parents()
-        skipping=continue_after is not None
         with self._lock:
             if what in self._store:
                 aggregators:list[Generator[T, None, None]] = []
@@ -308,51 +295,37 @@ class RootState:
                         logger.log(5, f"Skipping promise from {prom._provider.__class__}, because it is not the requested provider.")
                         continue
                     if isinstance(prom, _AggregatorPromise):
-                        logger.log(5, f"Yielding from aggregator over {prom._provider.__class__}")
-                        if not skipping:
-                            iter = prom.new_iter(caller, parents, use_parent, only_use_available, continue_from=None)
-                            if not round_robin:
-                                yield from iter
-                            else:
-                                try:
-                                    logger.log(5, "Yielding one from aggregator, because round_robin is true")
-                                    nxt = next(iter)
-                                    yield nxt
-                                    aggregators.append(iter)
-                                except StopIteration:
-                                    pass
+                        logger.log(5, f"Yielding from aggregator over {prom._provider.__class__} (available: {prom.count_available(caller, parents, use_parent)})")
+                        iter = prom.new_iter(caller, parents, use_parent, only_use_available, continue_from=None)
+                        if not round_robin:
+                            yield from iter
                         else:
-                            iter = prom.new_iter(caller, parents, use_parent, only_use_available, continue_from=continue_after)
-                            item = next(iter, None)
-                            if item is not None:
-                                if item != continue_after:
-                                    raise ValueError("The item yielded by the generator is not the expected item!")
-                                logger.log(5, f"{prom._provider.__class__} provides the item in continue_after. Continuing...")
-                                skipping = False
-                                yield from iter
+                            try:
+                                logger.log(5, f"Yielding one from aggregator over {prom._provider.__class__}, because round_robin is true")
+                                nxt = next(iter)
+                                yield nxt
+                                aggregators.append(iter)
+                            except StopIteration:
+                                pass
                     else:
                         logger.log(5, f"Calling StorePromise over {prom._provider.__class__}")
-                        if skipping:
-                            res = prom.get(caller, resolve_deferred, parents, use_parent, only_available=True)
-                            if res.is_some_and(lambda k:k == continue_after):
-                                logger.log(5, "Found continue_after value. Continuing as normal.")
-                                skipping = False
-                        else:
-                            res = prom.get(caller, resolve_deferred, parents, use_parent, only_use_available)
-                            if res.is_some():
-                                yield res.unwrap()
+                        res = prom.get(caller, resolve_deferred, parents, use_parent, only_use_available)
+                        if res.is_some():
+                            yield res.unwrap()
                 while len(aggregators) > 0:
                     logger.log(5, f"{len(aggregators)} aggregators remaining for {what}")
                     rem:list[Generator[T, None, None]] = []
                     for aggr in aggregators:
+                        logger.log(5, f"Loop: Yielding one from aggregator for {what}")
                         try:
                             nxt = next(aggr)
                             yield nxt
                         except StopIteration:
+                            logger.log(5, f"Aggregator empty for {what}")
                             rem.append(aggr)
                     for r in rem:
                         aggregators.remove(r)
-
+                logger.log(5, f"Nothing more to yield for {what}")
             else:
                 logger.log(5, f"Found no promises for {what}.")
 

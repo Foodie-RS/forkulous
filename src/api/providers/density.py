@@ -16,7 +16,6 @@ class UnitDensityProvider(OptionalProvider[Density]):
 
     @override
     def execute(self, state: RequestState) -> Option[Density]:
-        #TODO: search for all good volume units instead
         logger = logging.getLogger("ingr_api").getChild("DefDensProv")
         ureg = state.get(UnitRegistry[Any])
         ml = ureg("ml")

@@ -58,13 +58,14 @@ class ParseResultProvider(Provider[ParseResults]):
             parsed_name:Option[str]= Option.some(parsed.name[0].text)
         logger.debug("Got %s amounts", len(parsed.amount))
         if len(parsed.amount) >= 1:
-            all_amounts = parsed.amount
+            all_amounts:list[IngredientAmount] = parsed.amount
             if len(parsed.amount) > 1:
                 has_singular = any(it.SINGULAR for it in parsed.amount)
                 has_plural = any((not it.SINGULAR) for it in parsed.amount)
                 if ((not has_singular) or (not has_plural) or (len(parsed.amount) > 2)):
                     logger.warning("Multiple amounts found")
                 if has_singular and has_plural:
+                    all_amounts = []
                     for it in parsed.amount:
                         assert isinstance(it, IngredientAmount)
                         if not it.SINGULAR:
@@ -124,7 +125,15 @@ class ParseResultProvider(Provider[ParseResults]):
         else: # if len(parsed.amount) == 0
             actual_amount = 1
             logger.debug("No amount found, defaulting to 1")
-            def_unit = state.get(FallbackUnitCandidate)
+            state_msk = state.mask()
+            state_msk.set(ParserState, ParserState(
+                parsed_name=parsed_name,
+                quantity=1,
+                unit=[],
+                prep=Option.some_if(parsed.preparation).map(lambda it: it.text)
+            ))
+            def_unit = state_msk.get(EmptyUnitResult).res
+            state_msk.invalidate()
             best_selected_units = [def_unit]
             best_amount = None
             best_inner_amount = 1.0

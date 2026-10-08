@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from api.common import Option
 
-
 class IngredientModel(BaseModel):
     id:str|int|None
     description:str
@@ -124,6 +123,10 @@ class SearchResult:
 @dataclass
 class ProviderSearchResult:
     results:list[IngredientCandidate]
+
+@dataclass
+class NutriSearchParam:
+    cand:IngredientCandidate
 
 @dataclass
 class NutriSearchResult:

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, DebertaForSequenceClassification
 
-MODEL_DIR="./models/tf-forkulous-units"
+MODEL_DIR="./models/xsmall_units"
 
 with open("./fdc_unit_reg.train.json", "r") as f:
     train_dict = json.load(f)
@@ -57,6 +57,7 @@ def predict_weights(items: list[dict]) -> list[float]:
         unit = item["unit"]
         comments = item.get("comments", "none")
         prompt = f"FOOD: {food}\nUNIT: {unit}\nCOMMENTS: {comments}"
+        #prompt = f"FOOD: {food}\nCOMMENTS: {comments}"
         prompts.append(prompt)
 
     inputs = tokenizer(
@@ -81,11 +82,12 @@ test_ingredients = [
     {"food": "Ribs, NFS", "unit": "rack", "comments": "none"},
     {"food": "Celery, NFS", "unit": "stalk", "comments": "[diced]"},
     {"food": "Oil", "unit": "liter", "comments": "none"},
+    {"food": "Water", "unit": "liter", "comments": "none"},
 
 ]
 
+#add_scaler()
 predicted_grams = predict_weights(test_ingredients)
 
 for item, grams in zip(test_ingredients, predicted_grams):
     print(f"{item['unit']:>8} | {item['food']:<12} ({item['comments']}) -> {grams:6.3f} g")
-#add_scaler()

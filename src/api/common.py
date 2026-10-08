@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-
+from dataclasses import dataclass, field
+from typing import cast
 
 @dataclass
 class Option[T]:
@@ -76,3 +76,43 @@ class Option[T]:
             return False
         else:
             return predicate(self.unwrap())
+
+@dataclass
+class Result[T, E:Exception]:
+    _value:T|E
+    _err:bool
+
+    @staticmethod
+    def ok[K, X:Exception](val:K) -> Result[K, X]:
+        return Result(_value=val, _err=False)
+
+    @staticmethod
+    def err[K, X:Exception](val:X) -> Result[K, X]:
+        return Result(_value=val, _err=True)
+
+    @staticmethod
+    def catch[K, X:Exception](catch_what:type[X], lmda: Callable[[], K]) -> Result[K, X]:
+        try:
+            res = lmda()
+            return Result.ok(res)
+        except catch_what as e:
+            return Result.err(e)
+
+    def unwrap(self) -> T:
+        if self.is_err():
+            raise ValueError("Called unwrap() on Result.err")
+        return cast(T, self._value)
+
+    def unwrap_or(self, def_val:T) -> T:
+        if self.is_err():
+            return def_val
+        return self.unwrap()
+
+    def union(self) -> T|E:
+        return self._value
+
+    def is_ok(self) -> bool:
+        return not self._err
+
+    def is_err(self) -> bool:
+        return self._err

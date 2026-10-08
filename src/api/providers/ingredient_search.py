@@ -6,6 +6,7 @@ from typing import override
 from api.models import (
     IngredientCandidate,
     IngredientModel,
+    NutriSearchParam,
     NutriSearchResult,
     SearchParams,
     SearchRequest,
@@ -14,7 +15,6 @@ from api.models import (
 from api.state import Provider, RequestState
 
 GOOD_INGREDIENT_CUTOFF = 0.9
-
 
 class IngredientSearchProvider(Provider[SearchResult]):
     @override
@@ -35,7 +35,7 @@ class IngredientSearchProvider(Provider[SearchResult]):
         for ing in results:
             msk = state.mask()
             #TODO change this to use something else instead so it doesn't clash with ingredient providers
-            msk.set(IngredientCandidate, ing)
+            msk.set(NutriSearchParam, NutriSearchParam(cand=ing))
             nutris = msk.get(NutriSearchResult).result
             results_new.append(IngredientModel(
                 id=ing.id,

@@ -6,7 +6,7 @@ from typing import Any, override
 
 import pint
 
-from api.common import Option
+from api.common import Option, Result
 from api.models import (
     Density,
     ParserState,
@@ -69,20 +69,22 @@ class PintUnitProvider(OptionalProvider[UnitCandidate]):
         ctx = pint.Context()
         for it in PINT_EXCLUDE:
             ctx.redefine(f"{it} = nan g")
-        units_parsed = [ureg.parse_units(unit, case_sensitive=False) for unit in pstate.unit]
+        units_parsed_w = [Result.catch(pint.UndefinedUnitError, lambda: ureg.parse_units(unit, case_sensitive=False)) for unit in pstate.unit]
+        units_parsed = [k.unwrap() for k in units_parsed_w if k.is_ok()]
+        if len(units_parsed) == 0:
+            logger.debug("No units are pint compatible.")
+            return Option.none()
+        logger.debug(f"Found {len(units_parsed)} pint units")
         units_gram_compat:list[pint.Unit] = [u for u in units_parsed if u.is_compatible_with("g", ctx)]
         for unit in units_gram_compat:
-            logger.debug(f"Attempting {unit} (gram compatible)")
             pint_amnt = 1 * unit
-            try:
-                grams = float(pint_amnt.m)
-                if math.isnan(grams):
-                    logger.debug("Unit was excluded")
-                    continue
-                logger.debug(f"Good unit: {unit}")
-                return Option.some(_candidate(grams, unit, density_confidence=Option.some(1.0)))
-            except pint.errors.UndefinedUnitError:
-                pass
+            grams = float(pint_amnt.to("g").m)
+            logger.debug(f"Attempting {unit} (gram compatible:{grams} g )")
+            if math.isnan(grams):
+                logger.debug("Unit was excluded")
+                continue
+            logger.debug(f"Good unit: {unit}")
+            return Option.some(_candidate(grams, unit, density_confidence=Option.some(1.0)))
         density_w = state.get_optional(Density)
         if density_w.is_none():
             logger.debug("No gram-compatible units found and Density was None")
@@ -94,18 +96,14 @@ class PintUnitProvider(OptionalProvider[UnitCandidate]):
         density_confidence = density.confidence
         for unit_parsed in [k for k in units_parsed if k not in units_gram_compat]:
             logger.debug(f"Attempting {unit_parsed} (not gram compatible)")
-            try:
-                pint_amnt = 1 * unit_parsed
-                if pint_amnt.is_compatible_with("ml"):
-                    grams = float(pint_amnt.to("g", ctx).m)
-                    logger.debug(f"Calculating grams successful: {grams}")
-                    if math.isnan(grams):
-                        logger.debug("Unit was excluded")
-                        continue
-                    logger.debug(f"Adding unit candidate. Density confidence: {density.confidence}")
-                    return Option.some(_candidate(grams, unit_parsed, Option.some_if(density_confidence)))
-            except pint.errors.UndefinedUnitError as e:
-                logger.debug("Pint reported UndefinedUnitError:")
-                logger.debug(e)
+            pint_amnt = 1 * unit_parsed
+            if pint_amnt.is_compatible_with("ml"):
+                grams = float(pint_amnt.to("g", ctx).m)
+                logger.debug(f"Calculating grams successful: {grams}")
+                if math.isnan(grams):
+                    logger.debug("Unit was excluded")
+                    continue
+                logger.debug(f"Adding unit candidate. Density confidence: {density.confidence}")
+                return Option.some(_candidate(grams, unit_parsed, Option.some_if(density_confidence)))
         logger.debug("Reporting no unit present.")
         return Option.none()

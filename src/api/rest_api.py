@@ -25,11 +25,11 @@ async def lifespan(app: FastAPI):
         unit_ranker="sentence-transformers/all-MiniLM-L6-v2",
     )
     app.state.api = ing_api
+    logging.basicConfig(level=logging.WARNING)
+    logger = logging.getLogger("ingr_api")
+    logger.setLevel(level=logging.DEBUG)
     yield
 
-logging.basicConfig(level=logging.WARNING)
-logger = logging.getLogger("ingr_api")
-logger.setLevel(level=logging.DEBUG)
 
 app = FastAPI(lifespan=lifespan)
 

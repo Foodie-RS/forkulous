@@ -1,10 +1,10 @@
-from collections.abc import Generator
-import math
-import numpy as np
 import logging
+import math
+from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any, cast, override
 
+import numpy as np
 from pandas.io.common import is_bool
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from sentence_transformers.util import semantic_search
@@ -18,10 +18,8 @@ from api.models import (
     ParserState,
     S1_UnitNames_Res,
     UnitCandidate,
-    S2_UnitDict_Res,
 )
-from api.providers.fdc_ingredient import FDCCandidates, LocalFDCIngredientProvider
-from api.providers import unit_aggregation
+from api.providers.fdc_ingredient import LocalFDCIngredientProvider
 from api.state import GeneratorProvider, OptionalProvider, Provider, RequestState
 
 SERVING_MEASURE_UNITS = [1036,1049,1059,1069,1071,1096]
@@ -75,8 +73,9 @@ class FDCUnitNamesProv(Provider[S1_UnitNames_Res]):
         for cand in fdc_candidates:
             units = self.unit_corpus[cand.id]
             for unit in units:
-                if unit["unit_name"] != "":
-                    names[unit["plural_name"]] = unit["singular_name"]
+                if any(k is None or k == "" for k in [unit["unit_name"], unit["singular_name"], unit["plural_name"]]):
+                    continue
+                names[unit["plural_name"]] = unit["singular_name"]
         return S1_UnitNames_Res(res=names)
 
 @dataclass
@@ -150,63 +149,6 @@ class FDCUnitProvider(GeneratorProvider[UnitCandidate]):
             if candidate.relevance() > UNIT_INGR_CUTOFF:
                 logger.debug(f"Yielding semantic-searched unit {candidate.unit_name} (BE score: {score}, new total score {candidate})...")
                 yield candidate
-
-@dataclass
-class LocalFDCUnitDictProv(Provider[S2_UnitDict_Res]):
-    unit_corpus:_CorpusType
-
-    def __init__(self, unit_corpus:dict[str, list[dict[Any,Any]]]):
-        super().__init__(S2_UnitDict_Res)
-        self.unit_corpus=unit_corpus
-    @override
-    def execute(self, state: RequestState) -> S2_UnitDict_Res:
-        logger = logging.getLogger("ingr_api").getChild("FDCUnitProv")
-        fdc_candidates = state.get(FDCCandidates)
-        logger.debug(f"Got {len(fdc_candidates)} candidates")
-        #TODO: replace generator with for loop
-        def gener():
-            for id,candidate in fdc_candidates.items():
-                cand_units = self.unit_corpus[str(id)]
-                for unit in cand_units:
-                    new_unit = IngredientUnitCandidate(
-                        measure_unit_id=unit["measure_unit_id"],
-                        ingredient_candidate=candidate,
-                        comments=unit["comments"],
-                        modifier=unit["modifier"],
-                        entry_id=unit["entry_id"],
-                        gram_weight=unit["gram_weight"],
-                        plural_name=unit["plural_name"],
-                        singular_name=unit["singular_name"],
-                        seq_num=unit["seq_num"],
-                        unit_name=unit["unit_name"],
-                        source=unit["source"]
-                    )
-                    yield new_unit
-
-
-        units: dict[str, list[UnitCandidate]] = {}
-        for new_unit in gener():
-            added = False
-            if new_unit.unit_name is not None and len(new_unit.unit_name) > 0:
-                if new_unit.unit_name in units:
-                    old_units = units[new_unit.unit_name]
-                    added = False
-                    for ix, unit in enumerate(old_units):
-                        old_better = _cmp([
-                            (unit.relevance(), new_unit.relevance(), True),
-                            (cast(IngredientUnitCandidate, unit).seq_num, new_unit.seq_num, False),
-                            (len(unit.comments), len(new_unit.comments), False),
-                        ])
-                        if not old_better:
-                            old_units.insert(ix, new_unit)
-                            added = True
-                            break
-                    if not added:
-                        old_units.append(new_unit)
-                else:
-                    units[new_unit.unit_name] = [new_unit]
-        logger.debug(f"Got a total of {len(units)} units.")
-        return S2_UnitDict_Res(res=units)
 
 def _unit(unit_json:dict[str, Any], cand:IngredientCandidate) -> IngredientUnitCandidate:
     return IngredientUnitCandidate(

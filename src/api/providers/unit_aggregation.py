@@ -9,15 +9,10 @@ from api.common import Option
 from api.models import (
     FallbackUnitCandidate,
     ParserState,
-    S3_AggrDict_Res,
-    S4_DictFilter_Res,
     S5_SelectUnits_Res,
-    S6_SemanticPrep_Res,
-    TransientUnitSelectionResult,
     UnitCandidate,
-    S2_UnitDict_Res,
 )
-from api.state import OptionalProvider, Provider, RequestState
+from api.state import OptionalProvider, RequestState
 
 PREPARATION_RELEVANCE_FACTOR=0.1
 UNIT_EPSILON = 0.02

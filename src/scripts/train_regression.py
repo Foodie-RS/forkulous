@@ -16,7 +16,8 @@ from transformers import (
 from datasets import Dataset
 
 ADD_CLASS_LAYER=False
-MODEL_NAME="microsoft/deberta-v3-base"
+MODEL_NAME="microsoft/deberta-v3-small"
+OUT_DIR="./models/small_units"
 STANDARD_SCALER=True
 L1_LOSS=False
 DO_LOG1P=True
@@ -25,8 +26,8 @@ WARMUP_RT=0.1
 NUM_EPOCHS=4
 
 #=== Hyperparameters ===
-LR=5e-5
-LR_HEAD=1e-4
+LR=7e-5
+LR_HEAD=15e-5
 ACTUAL_BATCH=16
 GR_ACC=1
 
@@ -164,7 +165,7 @@ optimizer_grouped_parameters = [
 ]
 optimizer = torch.optim.AdamW(optimizer_grouped_parameters, weight_decay=0.01)
 training_args = TrainingArguments(
-    output_dir="./models/nonstd_unit",
+    output_dir=OUT_DIR,
     learning_rate=LR,
     lr_scheduler_type="cosine",
     per_device_train_batch_size=ACTUAL_BATCH,
@@ -201,4 +202,5 @@ trainer = Trainer(
     compute_loss_func=None if not L1_LOSS else smooth_l1_loss_func
 )
 
+#trainer.train(resume_from_checkpoint=True)
 trainer.train()

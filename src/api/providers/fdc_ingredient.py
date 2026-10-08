@@ -14,6 +14,7 @@ from usearch.index import Index
 from api.common import Option
 from api.models import (
     IngredientCandidate,
+    NutriSearchParam,
     Nutris,
     NutriSearchResult,
     ProviderSearchResult,
@@ -27,6 +28,7 @@ FDC_CE_Q_PROMPT="query: "
 FDC_CE_D_PROMPT="document: "
 FDC_CE_ACTION_PROMPT=""
 INGREDIENT_THRESH_RERANK=0.8
+MIN_SCORE=0.2
 
 NutriProvider = OptionalProvider[NutriSearchResult]
 IngredientProvider = GeneratorProvider[IngredientCandidate]
@@ -92,8 +94,7 @@ class LocalFDCIngredientProvider(IngredientProvider):
         reranked_list = self.model_ce.rank(f"{FDC_CE_Q_PROMPT}{ingr}", [f"{FDC_CE_D_PROMPT}{res[1]}" for res in results_be[ix:]], prompt=FDC_CE_ACTION_PROMPT, top_k=10)
         new_results:list[tuple[int, str, float]] = [(results_be[it["corpus_id"]][0], results_be[it["corpus_id"]][1], (1/(1+math.exp(-it["score"])))) for it in reranked_list]
         for id,desc,score in new_results:
-            if score < 0.2:
-                # TODO: make this a static variable
+            if score < MIN_SCORE:
                 return
             logger.debug(f"Yielding {desc} (score {score})")
             yield IngredientCandidate(
@@ -104,7 +105,7 @@ class LocalFDCIngredientProvider(IngredientProvider):
             )
 
 @dataclass
-class LocalFDCNutriProvider(NutriProvider):
+class LocalFDCNutriProvider(OptionalProvider[NutriSearchResult]):
     nutris:dict[str, Nutris]
 
     def __init__(self, nutris:dict[str, Nutris]):
@@ -113,8 +114,11 @@ class LocalFDCNutriProvider(NutriProvider):
 
     @override
     def execute(self, state: RequestState) -> Option[NutriSearchResult]:
-        cand = state.get(IngredientCandidate)
+        logger = logging.getLogger("ing_api").getChild("FDCNutris")
+        cand = state.get(NutriSearchParam).cand
         if cand.source != "fdc":
+            logger.debug(f"Candidate {cand.description} is not FDC, ")
             return Option.none()
         id = int(cand.id)
+        logger.debug(f"Got Nutris for {cand.description}")
         return Option.some(NutriSearchResult(result=self.nutris[str(id)]))
