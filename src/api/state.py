@@ -247,6 +247,7 @@ class RootState:
         self._lock = RLock()
 
     def set[T](self, key: type[T], item: T, caller:RequestState, insert:bool=True):
+        # TODO replace set() logic so that it updates a ValueProvider instead of adding a new one
         with self._lock:
             origin = get_origin(key) or key
             if not isinstance(item, origin):
@@ -291,12 +292,15 @@ class RootState:
                 logger.log(5, f"Inserting provider for {key} (origin: {origin})")
                 lst.insert(0, prom)
 
-    def iter[T](self, what:type[T], resolve_deferred:bool, caller:RequestState, use_old:bool, only_use_available:bool, from_provider:FromProviderType[T], continue_after:T|None) -> Generator[T, None, None]:
+    def iter[T](self, what:type[T], resolve_deferred:bool, caller:RequestState, use_parent:bool, only_use_available:bool, from_provider:FromProviderType[T], continue_after:T|None, round_robin:bool) -> Generator[T, None, None]:
         logger = logging.getLogger("ingr_api").getChild("RootState").getChild("iter")
+        if round_robin and (continue_after is not None):
+            raise ValueError("Can't use continue_after and round_robin at the same time!")
         parents = caller.get_parents()
         skipping=continue_after is not None
         with self._lock:
             if what in self._store:
+                aggregators:list[Generator[T, None, None]] = []
                 lst:list[_StorePromise[T]|_AggregatorPromise[T]] = cast(list[_StorePromise[T]|_AggregatorPromise[T]], self._store[what])
                 logger.log(5, f"Found {len(lst)} promises for {what}, yielding (state depth: {len(parents)})...")
                 for prom in lst:
@@ -304,28 +308,51 @@ class RootState:
                         logger.log(5, f"Skipping promise from {prom._provider.__class__}, because it is not the requested provider.")
                         continue
                     if isinstance(prom, _AggregatorPromise):
-                        logger.log(5, "Yielding from aggregator")
+                        logger.log(5, f"Yielding from aggregator over {prom._provider.__class__}")
                         if not skipping:
-                            yield from prom.new_iter(caller, parents, use_old, only_use_available, continue_from=None)
+                            iter = prom.new_iter(caller, parents, use_parent, only_use_available, continue_from=None)
+                            if not round_robin:
+                                yield from iter
+                            else:
+                                try:
+                                    logger.log(5, "Yielding one from aggregator, because round_robin is true")
+                                    nxt = next(iter)
+                                    yield nxt
+                                    aggregators.append(iter)
+                                except StopIteration:
+                                    pass
                         else:
-                            iter = prom.new_iter(caller, parents, use_old, only_use_available, continue_from=continue_after)
+                            iter = prom.new_iter(caller, parents, use_parent, only_use_available, continue_from=continue_after)
                             item = next(iter, None)
                             if item is not None:
                                 if item != continue_after:
                                     raise ValueError("The item yielded by the generator is not the expected item!")
+                                logger.log(5, f"{prom._provider.__class__} provides the item in continue_after. Continuing...")
                                 skipping = False
                                 yield from iter
                     else:
-                        logger.log(5, "Calling StorePromise")
+                        logger.log(5, f"Calling StorePromise over {prom._provider.__class__}")
                         if skipping:
-                            res = prom.get(caller, resolve_deferred, parents, use_old, only_available=True)
+                            res = prom.get(caller, resolve_deferred, parents, use_parent, only_available=True)
                             if res.is_some_and(lambda k:k == continue_after):
                                 logger.log(5, "Found continue_after value. Continuing as normal.")
                                 skipping = False
                         else:
-                            res = prom.get(caller, resolve_deferred, parents, use_old, only_use_available)
+                            res = prom.get(caller, resolve_deferred, parents, use_parent, only_use_available)
                             if res.is_some():
                                 yield res.unwrap()
+                while len(aggregators) > 0:
+                    logger.log(5, f"{len(aggregators)} aggregators remaining for {what}")
+                    rem:list[Generator[T, None, None]] = []
+                    for aggr in aggregators:
+                        try:
+                            nxt = next(aggr)
+                            yield nxt
+                        except StopIteration:
+                            rem.append(aggr)
+                    for r in rem:
+                        aggregators.remove(r)
+
             else:
                 logger.log(5, f"Found no promises for {what}.")
 
@@ -369,16 +396,16 @@ class RequestState:
         self.assert_not_masked()
         self._root.set(key, item, self, insert)
 
-    def iter[T](self, what:type[T], resolve_deferred:bool=True, use_old:bool=True, only_use_available:bool=False, from_provider:FromProviderType[T]=None, continue_after:T|None=None) -> Generator[T, None, None]:
+    def iter[T](self, what:type[T], resolve_deferred:bool=True, use_parent:bool=True, only_use_available:bool=False, from_provider:FromProviderType[T]=None, continue_after:T|None=None, round_robin:bool=False) -> Generator[T, None, None]:
         self.assert_valid()
-        return self._root.iter(what, resolve_deferred, self, use_old=use_old, only_use_available=only_use_available, from_provider=from_provider, continue_after=continue_after)
+        return self._root.iter(what, resolve_deferred, self, use_parent=use_parent, only_use_available=only_use_available, from_provider=from_provider, continue_after=continue_after, round_robin=round_robin)
 
     def count_available[T](self, what:type[T], use_old:bool=True) -> int:
         return self._root.count_available(self, what, use_old)
 
     def get_optional[T](self, what: type[T], resolve_deferred:bool=True, allow_parent:bool=True, only_use_available:bool=False, from_provider:FromProviderType[T]=None, continue_after:T|None=None) -> Option[T]:
         self.assert_valid()
-        nxt = next(self.iter(what, resolve_deferred=resolve_deferred, use_old=allow_parent, only_use_available=only_use_available, from_provider=from_provider, continue_after=continue_after), None)
+        nxt = next(self.iter(what, resolve_deferred=resolve_deferred, use_parent=allow_parent, only_use_available=only_use_available, from_provider=from_provider, continue_after=continue_after), None)
         return Option.some(nxt) if nxt is not None else Option.none()
 
     def invalidate(self):
@@ -471,4 +498,4 @@ class RequestState:
 
     def get_all[T](self, what: type[T], allow_deferred:bool=False, allow_parent:bool=True, only_use_available:bool=False, from_provider:FromProviderType[T]=None) -> list[T]:
         self.assert_valid()
-        return [k for k in self.iter(what, allow_deferred, use_old=allow_parent, only_use_available=only_use_available, from_provider=from_provider)]
+        return [k for k in self.iter(what, allow_deferred, use_parent=allow_parent, only_use_available=only_use_available, from_provider=from_provider)]

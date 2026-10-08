@@ -34,6 +34,7 @@ class IngredientSearchProvider(Provider[SearchResult]):
         logger.debug("Searching nutris")
         for ing in results:
             msk = state.mask()
+            #TODO change this to use something else instead so it doesn't clash with ingredient providers
             msk.set(IngredientCandidate, ing)
             nutris = msk.get(NutriSearchResult).result
             results_new.append(IngredientModel(

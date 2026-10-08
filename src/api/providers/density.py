@@ -4,7 +4,7 @@ from typing import Any, override
 from pint import UnitRegistry
 
 from api.common import Option
-from api.models import Density, UnitCandidate, S2_UnitDict_Res
+from api.models import Density, ParserState, UnitCandidate, S2_UnitDict_Res
 from api.state import OptionalProvider, Provider, RequestState
 
 GOOD_VOLUME_UNITS = {"cup", "cups", "cubic inch", "cubic inches", "quart", "quarts", "pint", "pints", "ml", "milliliter", "milliliters", "l", "liter", "liters"}
@@ -21,7 +21,15 @@ class UnitDensityProvider(OptionalProvider[Density]):
         ureg = state.get(UnitRegistry[Any])
         ml = ureg("ml")
         g = ureg("g")
-        for unit in state.iter(UnitCandidate, resolve_deferred=False):
+        pstate = state.get(ParserState)
+        state_msk = state.mask()
+        state_msk.set(ParserState, ParserState(
+            parsed_name=pstate.parsed_name,
+            prep=pstate.prep,
+            quantity=pstate.quantity,
+            unit=list(GOOD_VOLUME_UNITS)
+        ))
+        for unit in state_msk.iter(UnitCandidate, resolve_deferred=False, use_parent=False):
             if unit.unit_name is not None and unit.unit_name.lower() in GOOD_VOLUME_UNITS:
                 logger.debug(f"Found good volume unit: {unit.unit_name.lower()}")
                 pint_unit = ureg(unit.unit_name)
@@ -32,6 +40,7 @@ class UnitDensityProvider(OptionalProvider[Density]):
                     confidence=unit.relevance(),
                     density=float(density.m)
                 ))
+        state_msk.invalidate()
         logger.debug("No good volume units found!")
         return Option.none()
 

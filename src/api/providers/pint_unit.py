@@ -36,6 +36,19 @@ class PintUnitNamesProvider[T](Provider[S1_UnitNames_Res]):
     def execute(self, state: RequestState) -> S1_UnitNames_Res:
         return S1_UnitNames_Res(res=self.units)
 
+def _candidate(grams:float, unit:pint.Unit, density_confidence:Option[float]) -> PintUnitCandidate:
+    return PintUnitCandidate(
+        comments=[],
+        entry_id=-1,
+        modifier=None,
+        gram_weight=grams,
+        plural_name=f"{unit}s",
+        singular_name=f"{unit}",
+        unit_name=f"{unit}",
+        density_confidence=density_confidence.unwrap_or_union(None),
+        source="pint"
+    )
+
 class PintUnitProvider(OptionalProvider[UnitCandidate]):
 
     def __init__(self):
@@ -49,53 +62,50 @@ class PintUnitProvider(OptionalProvider[UnitCandidate]):
     def execute(self, state:RequestState) -> Option[UnitCandidate]:
         logger = logging.getLogger("ingr_api").getChild("pint_provider")
         pstate = state.get(ParserState)
-        if pstate.unit.is_none():
+        if len(pstate.unit) == 0:
             logger.debug("No unit parsed, returning empty")
             return Option.none()
-        unit = pstate.unit.unwrap()
-        logger.debug(f"Looking up {unit}")
-        ctx = pint.Context()
         ureg = state.get(pint.UnitRegistry[Any])
-        try:
-            pint_parsed = ureg.parse_units(unit, case_sensitive=False)
-            logger.debug(f"Unit parsed successfully as {pint_parsed}")
-            pint_amnt = 1 * pint_parsed
-            for it in PINT_EXCLUDE:
-                ctx.redefine(f"{it} = nan g")
-            gram_compatible = pint_amnt.is_compatible_with("g", ctx)
-            logger.debug(f"Unit is compatible with gram: {gram_compatible}")
-            is_volume = False
-            density_confidence:float|None = 1.0
-            if not gram_compatible and pint_amnt.is_compatible_with("ml"):
-                density_w = state.get_optional(Density)
-                if density_w.is_none():
-                    logger.debug("No density available, skipping")
-                    return Option.none()
-                density = density_w.unwrap()
-                density_confidence = density.confidence
-                is_volume = True
-                logger.debug(f"Adding density transformation: {density.density:.2f}")
-                ctx.add_transformation("[volume]", "[mass]", lambda ureg, value, **kwargs: value * density.density * (ureg("g")/ureg("ml")))
-                ctx.add_transformation("[length] ** 3", "[mass]", lambda ureg, value, **kwargs: value * density.density * (ureg("g")/ureg("ml")))
-            if is_volume or gram_compatible:
-                grams = float(pint_amnt.to("g", ctx).m)
-                logger.debug(f"Calculating grams successful: {grams}")
-                if not math.isnan(grams):
-                    logger.debug(f"Adding unit candidate. Density confidence: {'not required' if gram_compatible else ('not present' if density is None else density.confidence)}")
-                    cand = PintUnitCandidate(
-                        comments=[],
-                        entry_id=-1,
-                        modifier=None,
-                        gram_weight=grams,
-                        plural_name=f"{pint_parsed}s",
-                        singular_name=f"{pint_parsed}",
-                        unit_name=f"{pint_parsed}",
-                        density_confidence=density_confidence,
-                        source="pint"
-                    )
-                    return Option.some(cand)
-        except pint.errors.UndefinedUnitError as e:
-            logger.debug("Pint reported UndefinedUnitError:")
-            logger.debug(e)
+        ctx = pint.Context()
+        for it in PINT_EXCLUDE:
+            ctx.redefine(f"{it} = nan g")
+        units_parsed = [ureg.parse_units(unit, case_sensitive=False) for unit in pstate.unit]
+        units_gram_compat:list[pint.Unit] = [u for u in units_parsed if u.is_compatible_with("g", ctx)]
+        for unit in units_gram_compat:
+            logger.debug(f"Attempting {unit} (gram compatible)")
+            pint_amnt = 1 * unit
+            try:
+                grams = float(pint_amnt.m)
+                if math.isnan(grams):
+                    logger.debug("Unit was excluded")
+                    continue
+                logger.debug(f"Good unit: {unit}")
+                return Option.some(_candidate(grams, unit, density_confidence=Option.some(1.0)))
+            except pint.errors.UndefinedUnitError:
+                pass
+        density_w = state.get_optional(Density)
+        if density_w.is_none():
+            logger.debug("No gram-compatible units found and Density was None")
+            return Option.none()
+        density = density_w.unwrap()
+        logger.debug(f"Adding density transformation: {density.density:.2f}")
+        ctx.add_transformation("[volume]", "[mass]", lambda ureg, value, **kwargs: value * density.density * (ureg("g")/ureg("ml")))
+        ctx.add_transformation("[length] ** 3", "[mass]", lambda ureg, value, **kwargs: value * density.density * (ureg("g")/ureg("ml")))
+        density_confidence = density.confidence
+        for unit_parsed in [k for k in units_parsed if k not in units_gram_compat]:
+            logger.debug(f"Attempting {unit_parsed} (not gram compatible)")
+            try:
+                pint_amnt = 1 * unit_parsed
+                if pint_amnt.is_compatible_with("ml"):
+                    grams = float(pint_amnt.to("g", ctx).m)
+                    logger.debug(f"Calculating grams successful: {grams}")
+                    if math.isnan(grams):
+                        logger.debug("Unit was excluded")
+                        continue
+                    logger.debug(f"Adding unit candidate. Density confidence: {density.confidence}")
+                    return Option.some(_candidate(grams, unit_parsed, Option.some_if(density_confidence)))
+            except pint.errors.UndefinedUnitError as e:
+                logger.debug("Pint reported UndefinedUnitError:")
+                logger.debug(e)
         logger.debug("Reporting no unit present.")
         return Option.none()

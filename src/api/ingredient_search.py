@@ -173,7 +173,7 @@ def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
         unit_corpus=unit_corpus,
     )
     #TOOD replace CE with argument
-    unit_prov = FDCUnitProvider(unit_corpus, CrossEncoder("cross-encoder/ms-marco-MiniLM-L6-v2"))
+    unit_prov = FDCUnitProvider(unit_corpus, unit_ranker=model_units)
     fdc_names = FDCUnitNamesProv(unit_corpus)
     pint_nam_prov = PintUnitNamesProvider(ureg=UREG)
     pint_prov = PintUnitProvider()
@@ -190,7 +190,7 @@ def _load(be_model:str|SentenceTransformer,ce_model:str|CrossEncoder, unit_ranke
         IngredientCandidate:[ingr_prov],
         NutriSearchResult:[nutri_prov],
         EmptyUnitResult:[empty_prov, empty_regression],
-        UnitCandidate:[unit_prov, pint_prov],
+        UnitCandidate:[pint_prov, unit_prov],
         S1_UnitNames_Res:[pint_nam_prov, fdc_names],
         FallbackUnitCandidate:[unit_regression, fb_prov],
         Density: [dense_prov, dense_regression, fb_dense]

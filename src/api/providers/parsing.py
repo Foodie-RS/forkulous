@@ -78,7 +78,6 @@ class ParseResultProvider(Provider[ParseResults]):
             best_score = 0
             best_amount = None
             best_inner_amount = 0.0
-            best_parsed_unit:Option[str] = Option.none()
             for amnt in all_amounts:
                 assert isinstance(amnt, IngredientAmount)
                 if isinstance(amnt.quantity, str) and len(amnt.quantity) == 0:
@@ -86,7 +85,8 @@ class ParseResultProvider(Provider[ParseResults]):
                     actual_amount = 1.0
                 else:
                     actual_amount = float(amnt.quantity)
-                parsed_unit:Option[str]=Option.none() if ((not isinstance(amnt.unit, str)) or (amnt.unit == "")) else Option.some(amnt.unit)
+                #TODO actually collect inner units into a list
+                parsed_unit:list[str]=[] if ((not isinstance(amnt.unit, str)) or (amnt.unit == "")) else [amnt.unit]
                 state_msk = state.mask()
                 state_msk.set(ParserState, ParserState(
                     quantity=actual_amount,
@@ -108,7 +108,6 @@ class ParseResultProvider(Provider[ParseResults]):
                         best_selected_units = [new_unit]
                         best_amount = amnt
                         best_inner_amount = actual_amount
-                        best_parsed_unit = Option.none()
                 else:
                     # unit resolution
                     logger.debug("Unit Parsing: Looking up inner unit: %s", amnt.unit)
@@ -121,7 +120,6 @@ class ParseResultProvider(Provider[ParseResults]):
                         best_selected_units = selected_units
                         best_amount = amnt
                         best_inner_amount = 1 if amnt.quantity == "" else float(amnt.quantity)
-                        best_parsed_unit = parsed_unit
                 state_msk.invalidate()
         else: # if len(parsed.amount) == 0
             actual_amount = 1
@@ -130,7 +128,6 @@ class ParseResultProvider(Provider[ParseResults]):
             best_selected_units = [def_unit]
             best_amount = None
             best_inner_amount = 1.0
-            best_parsed_unit = Option.none()
 
         return ParseResults (
             name=[NameModel(
@@ -140,7 +137,6 @@ class ParseResultProvider(Provider[ParseResults]):
             ) for it in parsed.name],
             amount=AmountModel(
                 quantity=best_inner_amount,
-                parsed_unit=best_parsed_unit.to_union(),
                 outer_amount=outer_amount,
                 confidence=None if not best_amount else best_amount.confidence,
                 resolved_units=[UnitModel(
@@ -148,7 +144,8 @@ class ParseResultProvider(Provider[ParseResults]):
                     comments=it.comments,
                     source=it.source,
                     relevance=it.relevance(),
-                    gram_weight=it.gram_weight
+                    gram_weight=it.gram_weight,
+                    parsed_from=it.parsed_from
                 ) for it in best_selected_units
                 ]
             )
@@ -171,7 +168,6 @@ class ShortParseResultProvider(Provider[ShortParseResult]):
 
         parse_res = ShortParseResult(
             quantity=qtty,
-            parsed_unit=amnt.parsed_unit,
             nutris_calculated=final_nutris,
             outer_amount=amnt.outer_amount,
             nutris_confidence=None if (unit.relevance is None or amnt.confidence is None) else (unit.relevance * ing.score * amnt.confidence),

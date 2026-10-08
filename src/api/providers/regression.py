@@ -8,6 +8,7 @@ from api.models import (
     Density,
     EmptyUnitResult,
     FallbackUnitCandidate,
+    IngredientCandidate,
     ParserState,
 )
 from api.providers.fdc_ingredient import FDCCandidates
@@ -28,9 +29,9 @@ class DensityRegressionProvider(OptionalProvider[Density]):
     @override
     def execute(self, state: RequestState) -> Option[Density]:
         logger = logging.getLogger("ingr_api").getChild("DensityRegr")
-        cands = state.get_optional(FDCCandidates)
+        cands = state.get_all(IngredientCandidate, only_use_available=True)
         pstate = state.get(ParserState)
-        if cands.is_none_or(lambda k: len(k) == 0):
+        if len(cands) == 0:
             if pstate.parsed_name.is_none_or(lambda k:k==""):
                 logger.debug("Can't infer density without fdc candidate or parsed name!")
                 return Option.none()
@@ -38,7 +39,7 @@ class DensityRegressionProvider(OptionalProvider[Density]):
             score = 0.5
             cand = pstate.parsed_name.unwrap()
         else:
-            _, best_cand = max(cands.unwrap().items(), key=lambda it: it[1].score)
+            best_cand = max(cands, key=lambda it: it.score)
             score = best_cand.score
             cand = best_cand.description
         comments = pstate.prep.map(lambda k: [k]).unwrap_or([])
@@ -62,17 +63,19 @@ class NonstandardUnitRegrProvider(Provider[FallbackUnitCandidate]):
     def execute(self, state: RequestState) -> FallbackUnitCandidate:
         logger = logging.getLogger("ingr_api").getChild("UnitRegr")
         pstate = state.get(ParserState)
-        cands = state.get_optional(FDCCandidates)
-        if cands.is_none_or(lambda k:len(k) == 0):
+        cands = state.get_all(IngredientCandidate, only_use_available=True)
+        if len(cands) == 0:
             logger.debug("No FDC candidates, using standard string")
             cand_name = pstate.parsed_name.unwrap_or("food")
         else:
-            _, best_cand = max(cands.unwrap().items(), key=lambda k: k[1].score)
+            best_cand = max(cands, key=lambda k: k.score)
             cand_name = best_cand.description
         logger.debug(f"Using {cand_name} as food")
-        if pstate.unit.is_none_or(lambda k:k==""):
+        units_fltr = [un for un in pstate.unit if un != ""]
+        if len(units_fltr) == 0:
             raise ValueError("Called NonstandardUnitRegrProvider when unit was empty/None!")
-        unit_name = pstate.unit.unwrap()
+        unit_name = units_fltr[0]
+        logger.debug(f"Using {unit_name} for inference")
         if unit_name[-1] == "s":
             singular_name = unit_name[:-1]
             plural_name = unit_name
@@ -105,12 +108,12 @@ class EmptyUnitRegrProvider(Provider[EmptyUnitResult]):
     def execute(self, state: RequestState) -> EmptyUnitResult:
         logger = logging.getLogger("ingr_api").getChild("EmptyRegr")
         pstate = state.get(ParserState)
-        cands = state.get_optional(FDCCandidates)
-        if cands.is_none_or(lambda k:len(k) == 0):
+        cands = state.get_all(IngredientCandidate, only_use_available=True)
+        if len(cands) == 0:
             logger.debug("No FDC candidates, using standard string")
             cand_name = pstate.parsed_name.unwrap_or("food")
         else:
-            _, best_cand = max(cands.unwrap().items(), key=lambda k: k[1].score)
+            best_cand = max(cands, key=lambda k: k.score)
             cand_name = best_cand.description
         logger.debug(f"Using {cand_name} as food")
         comments = pstate.prep.map(lambda k:[k]).unwrap_or([])

@@ -27,10 +27,10 @@ class UnitModel(BaseModel):
     source:str
     relevance:float|None
     gram_weight:float
+    parsed_from:str|None
 
 class AmountModel(BaseModel):
     quantity:float|None
-    parsed_unit:str|None
     confidence:float|None
     outer_amount:float
     resolved_units:list[UnitModel]
@@ -41,7 +41,6 @@ class ParseResults(BaseModel):
 
 class ShortParseResult(BaseModel):
     quantity: float|None
-    parsed_unit: str|None
     resolved_unit:UnitModel
     outer_amount:float
     nutris_calculated:Nutris
@@ -153,7 +152,7 @@ class EmptyUnitResult:
 @dataclass
 class ParserState:
     quantity:float
-    unit:Option[str]
+    unit:list[str]
     parsed_name:Option[str]
     prep:Option[str]
 
@@ -170,6 +169,7 @@ class UnitCandidate(metaclass=abc.ABCMeta):
     source:str
     score_modifier:float = 1.0
     score_override:float|None=None
+    parsed_from:str|None=None
 
     def relevance(self) -> float:
         if self.score_override is not None:
@@ -211,6 +211,7 @@ class FallbackUnitCandidate(UnitCandidate):
     def is_fallback(self) -> bool:
         return True
 
+    @override
     def clone(self) -> FallbackUnitCandidate:
         return FallbackUnitCandidate(
             unit_name=self.unit_name,

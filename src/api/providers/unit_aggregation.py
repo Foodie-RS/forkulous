@@ -21,11 +21,12 @@ from api.state import OptionalProvider, Provider, RequestState
 
 PREPARATION_RELEVANCE_FACTOR=0.1
 UNIT_EPSILON = 0.02
-UNIT_RELEVANCE_CUTOFF = 0.7
+UNIT_RELEVANCE_CUTOFF = 0.5
 INGREDIENT_HARD_CUTOFF = 0.1
 UNIT_SEMANTIC_SCORE_RELEVANCE_FACTOR=0.4
 UNIT_SCORE_CUTOFF=0.5
-UNIT_UPPER_ACCEPT_LIMIT=0.8
+UNIT_EARLY_ACCEPT_LIMIT=0.7
+UNIT_FAST_LIMIT=5
 
 def _rerank_prep(topk:list[UnitCandidate], unit_ranker:SentenceTransformer, state:RequestState) -> bool:
     logger = logging.getLogger("ingr_api").getChild("prep_search")
@@ -85,9 +86,9 @@ class S5_SelectUnits_Prov(OptionalProvider[S5_SelectUnits_Res]):
         logger = logging.getLogger("ingr_api").getChild("UnitSel")
         logger.debug("Aggregating units")
         candidates:list[UnitCandidate] = []
-        for cand in state.iter(UnitCandidate):
+        for cand in state.iter(UnitCandidate, round_robin=True):
             candidates.append(cand)
-            if cand.relevance() >= UNIT_UPPER_ACCEPT_LIMIT:
+            if len(candidates) >= UNIT_FAST_LIMIT or cand.relevance() >= UNIT_EARLY_ACCEPT_LIMIT:
                 # stop early if we get a good unit
                 break
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 
 from collections.abc import Generator
 import logging
@@ -25,6 +26,7 @@ FDCCandidates = dict[str, IngredientCandidate]
 FDC_CE_Q_PROMPT="query: "
 FDC_CE_D_PROMPT="document: "
 FDC_CE_ACTION_PROMPT=""
+INGREDIENT_THRESH_RERANK=0.8
 
 NutriProvider = OptionalProvider[NutriSearchResult]
 IngredientProvider = GeneratorProvider[IngredientCandidate]
@@ -53,21 +55,50 @@ class LocalFDCIngredientProvider(IngredientProvider):
         req = state.get(SearchRequest)
         ingr = req.query
         embd:np.ndarray = cast(np.ndarray, self.model_be.encode_query(ingr, convert_to_numpy=True))
-        result_be:list[tuple[int, str]] = [(match.key, self.corpus[match.key]) for match in self.index.search(embd, count=req.search_params.max_results_be, exact=not req.search_params.fast)]
+        result_be_1:list[tuple[int, str, float]] = [(match.key, self.corpus[match.key], 1.0-match.distance) for match in self.index.search(embd, count=req.search_params.max_results_be, exact=not req.search_params.fast)]
         docs:list[str] = []
-        new_result:list[tuple[int, str]] = []
-        for id, desc in result_be:
+        results_be:list[tuple[int, str, float]] = []
+        for id, desc, score in result_be_1:
             if desc in docs:
                 continue
             docs.append(desc)
-            new_result.append((id, desc))
-        result_be = new_result
-        for res in result_be:
+            results_be.append((id, desc, score))
+        above_thresh_encountered = False
+        count_below_thresh = 0
+        ix = 0
+        for ix,res in enumerate(results_be):
+            if not above_thresh_encountered and ix >= 3:
+                break
+            if count_below_thresh > 7:
+                logger.debug("Good ingredient found, but encountered too many consecutive bad ingredients. Bailing out.")
+                return
             score = float(self.model_ce.predict((f"{FDC_CE_Q_PROMPT}{ingr}", f"{FDC_CE_D_PROMPT}{res[1]}"), prompt=FDC_CE_ACTION_PROMPT))
-            logger.debug(f"Yielding {res[1]} (score {score})")
+            score_sigm = 1 / (1 + math.exp(-score))
+            if score_sigm > INGREDIENT_THRESH_RERANK:
+                above_thresh_encountered = True
+                count_below_thresh = 0
+            else:
+                count_below_thresh += 1
+            logger.debug(f"Yielding {res[1]} (score {score_sigm})")
             yield IngredientCandidate(
                 id=str(res[0]),
                 description=res[1],
+                score=score_sigm,
+                source="fdc"
+            )
+        if above_thresh_encountered:
+            return
+        logger.debug("No clear winner found, reranking all")
+        reranked_list = self.model_ce.rank(f"{FDC_CE_Q_PROMPT}{ingr}", [f"{FDC_CE_D_PROMPT}{res[1]}" for res in results_be[ix:]], prompt=FDC_CE_ACTION_PROMPT, top_k=10)
+        new_results:list[tuple[int, str, float]] = [(results_be[it["corpus_id"]][0], results_be[it["corpus_id"]][1], (1/(1+math.exp(-it["score"])))) for it in reranked_list]
+        for id,desc,score in new_results:
+            if score < 0.2:
+                # TODO: make this a static variable
+                return
+            logger.debug(f"Yielding {desc} (score {score})")
+            yield IngredientCandidate(
+                id=str(id),
+                description=desc,
                 score=score,
                 source="fdc"
             )
