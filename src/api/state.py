@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import abc
-from enum import Enum
 import logging
 import weakref
 from collections.abc import Generator
@@ -10,7 +9,6 @@ from threading import RLock
 from typing import Any, cast, get_origin, override
 
 from api.common import Option
-
 
 
 @dataclass

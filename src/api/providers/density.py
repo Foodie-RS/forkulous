@@ -4,10 +4,15 @@ from typing import Any, override
 from pint import UnitRegistry
 
 from api.common import Option
-from api.models import Density, ParserState, UnitCandidate, S2_UnitDict_Res
+from api.models import Density, NonemptyAmount, ParserState, UnitCandidate
 from api.state import OptionalProvider, Provider, RequestState
 
 GOOD_VOLUME_UNITS = {"cup", "cups", "cubic inch", "cubic inches", "quart", "quarts", "pint", "pints", "ml", "milliliter", "milliliters", "l", "liter", "liters"}
+VOL_AMNTS = [NonemptyAmount(
+    confidence=1.0,
+    quantity=1.0,
+    unit=unit
+) for unit in GOOD_VOLUME_UNITS]
 
 class UnitDensityProvider(OptionalProvider[Density]):
 
@@ -25,8 +30,9 @@ class UnitDensityProvider(OptionalProvider[Density]):
         state_msk.set(ParserState, ParserState(
             parsed_name=pstate.parsed_name,
             prep=pstate.prep,
-            quantity=pstate.quantity,
-            unit=list(GOOD_VOLUME_UNITS)
+            nonempty_amounts=VOL_AMNTS,
+            outer_amount=Option.none(),
+            empty_amount=Option.none()
         ))
         for unit in state_msk.iter(UnitCandidate, resolve_deferred=False, use_parent=False):
             if unit.unit_name is not None and unit.unit_name.lower() in GOOD_VOLUME_UNITS:

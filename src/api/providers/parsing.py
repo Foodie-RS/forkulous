@@ -1,5 +1,6 @@
 import logging
-from typing import override
+from dataclasses import dataclass
+from typing import cast, override
 
 import ingredient_parser
 from ingredient_parser.dataclasses import (
@@ -7,23 +8,24 @@ from ingredient_parser.dataclasses import (
     ParsedIngredient,
 )
 
-from api.common import Option
+from api.common import Option, Result
 from api.models import (
     AmountModel,
-    EmptyUnitResult,
-    FallbackUnitCandidate,
     NameModel,
+    NonemptyAmount,
     ParseResults,
     ParserState,
     S1_UnitNames_Res,
-    S5_SelectUnits_Res,
     SearchRequest,
-    SearchResult,
     ShortParseResult,
+    UnitAggregateResult,
+    UnitCandidate,
     UnitModel,
 )
 from api.state import Provider, RequestState
 
+EQ_TO_EMPTY = ["medium", "normal", "regular"]
+GOOD_UNIT_REL = 0.8
 
 class ParserProvider(Provider[ParsedIngredient]):
     @override
@@ -41,145 +43,139 @@ class ParserProvider(Provider[ParsedIngredient]):
         logger.debug(f"Parsed \"{search_req.query}\": {len(res.amount)} amounts, {len(res.name)} names, preparation: {"yes" if res.preparation is not None else "no"}")
         return res
 
-class ParseResultProvider(Provider[ParseResults]):
+@dataclass
+class _AmountCandidate:
+    unit:UnitCandidate
+    qtty:float
+    unit_parsed:Option[str]
+    parser_conf:Option[float]
+
+class ParserStateProvider(Provider[ParserState]):
     @override
-    def execute(self, state:RequestState) -> ParseResults:
-        logger = logging.getLogger("ingr_api").getChild("PrsResProv")
+    def execute(self, state:RequestState) -> ParserState:
+        logger = logging.getLogger("ingr_api").getChild("ParserState")
         logger.log(5, "Getting ParsedIngredient")
         parsed = state.get(ParsedIngredient)
         logger.log(5, "Got ParsedIngredient")
 
         # resolve amount and unit order
-        outer_amount:float = 1
         if len(parsed.name) < 1:
             parsed_name = Option.none()
             logger.warning("Parsed name is empty")
         else:
             parsed_name:Option[str]= Option.some(parsed.name[0].text)
         logger.debug("Got %s amounts", len(parsed.amount))
-        if len(parsed.amount) >= 1:
-            all_amounts:list[IngredientAmount] = parsed.amount
-            if len(parsed.amount) > 1:
-                has_singular = any(it.SINGULAR for it in parsed.amount)
-                has_plural = any((not it.SINGULAR) for it in parsed.amount)
-                if ((not has_singular) or (not has_plural) or (len(parsed.amount) > 2)):
-                    logger.warning("Multiple amounts found")
-                if has_singular and has_plural:
-                    all_amounts = []
-                    for it in parsed.amount:
-                        assert isinstance(it, IngredientAmount)
-                        if not it.SINGULAR:
-                            logger.debug(f"Setting {it.text} as outer amount")
-                            outer_amount = float(it.quantity)
-                        else:
-                            logger.debug(f"Setting {it.text} as inner amount")
-                            all_amounts.append(it)
-            prep:Option[str] = Option.none() if (parsed.preparation is None) or (len(parsed.preparation.text) == 0) else Option.some(parsed.preparation.text)
-            best_selected_units = []
-            best_score = 0
-            best_amount = None
-            best_inner_amount = 0.0
-            for amnt in all_amounts:
-                assert isinstance(amnt, IngredientAmount)
-                if isinstance(amnt.quantity, str) and len(amnt.quantity) == 0:
-                    logger.warning("Quantity is empty string, defaulting to 1.0")
-                    actual_amount = 1.0
+        amounts:list[IngredientAmount] = []
+        outer_amount:Option[float] = Option.none()
+        prep:Option[str] = Option.some_if(parsed.preparation).map(lambda k:k.text.strip()).filter(lambda k: len(k) > 0)
+        amounts_pre = [cast(IngredientAmount, it) for it in parsed.amount]
+        has_singular = any(it.SINGULAR for it in amounts_pre)
+        has_plural = any((not it.SINGULAR) for it in amounts_pre)
+        if ((not has_singular) or (not has_plural)) and (len(amounts_pre) > 2):
+            logger.warning("Multiple distinct amounts found")
+        if has_singular and has_plural:
+            for amnt in amounts_pre:
+                if not amnt.SINGULAR:
+                    logger.debug(f"Setting {amnt.text} as outer amount")
+                    outer_amount = Result.catch(ValueError, lambda: float(amnt.quantity)).ok_or_none().filter(lambda k: k>0)
                 else:
-                    actual_amount = float(amnt.quantity)
-                #TODO actually collect inner units into a list
-                parsed_unit:list[str]=[] if ((not isinstance(amnt.unit, str)) or (amnt.unit == "")) else [amnt.unit]
-                state_msk = state.mask()
-                state_msk.set(ParserState, ParserState(
-                    quantity=actual_amount,
-                    unit=parsed_unit,
-                    parsed_name=parsed_name,
-                    prep=prep
-                ))
-                if (not amnt.unit) or (amnt.unit == ""):
-                    actual_amount = float(amnt.quantity)
-                    logger.debug("Empty unit, looking up default unit")
-                    # TODO: replace with iter get
-                    def_unit = state_msk.get_all(EmptyUnitResult)
-                    def_units = [k.res for k in def_unit]
-                    def_units.sort(key=lambda k:k.relevance(), reverse=True)
-                    new_unit = def_units[0]
-                    score = new_unit.relevance()
-                    if best_score < score:
-                        best_score = score
-                        best_selected_units = [new_unit]
-                        best_amount = amnt
-                        best_inner_amount = actual_amount
-                else:
-                    # unit resolution
-                    logger.debug("Unit Parsing: Looking up inner unit: %s", amnt.unit)
-                    selected_units = state_msk.get(S5_SelectUnits_Res).res
+                    logger.debug(f"Adding {amnt.text} as inner amount")
+                    amounts.append(amnt)
+        else:
+            amounts = amounts_pre
+        amounts_mapped:list[tuple[float, Option[str], float]] = []
+        for amnt in amounts:
+            unit = Option.some(cast(str, amnt.unit).strip().lower()).filter(lambda k: len(k) != 0).filter(lambda k: k not in EQ_TO_EMPTY)
+            quantity = Result.catch(ValueError, lambda: float(amnt.quantity)).ok_or_none().filter(lambda k: k>0).unwrap_or(1.0)
+            amounts_mapped.append((quantity, unit, amnt.confidence))
+        empty_amnt = Option.some_if(max(((k[0], k[2]) for k in amounts_mapped if k[1].is_none()), key=lambda l:l[1], default=None))
+        non_empty = [NonemptyAmount(quantity=k[0], unit=k[1].unwrap(), confidence=k[2]) for k in amounts_mapped if k[1].is_some()]
+        return ParserState(
+            nonempty_amounts=non_empty,
+            empty_amount=empty_amnt,
+            parsed_name=parsed_name,
+            prep=prep,
+            outer_amount=outer_amount
+        )
 
-                    logger.debug("Got units: [%s]", ", ".join([x.unit_name or "<null>" for x in selected_units]))
-                    selected_units = selected_units[:3]
-                    if len(selected_units) > 0 and best_score < selected_units[0].relevance():
-                        best_score = selected_units[0].relevance()
-                        best_selected_units = selected_units
-                        best_amount = amnt
-                        best_inner_amount = 1 if amnt.quantity == "" else float(amnt.quantity)
-                state_msk.invalidate()
-        else: # if len(parsed.amount) == 0
-            actual_amount = 1
-            logger.debug("No amount found, defaulting to 1")
-            state_msk = state.mask()
-            state_msk.set(ParserState, ParserState(
-                parsed_name=parsed_name,
-                quantity=1,
-                unit=[],
-                prep=Option.some_if(parsed.preparation).map(lambda it: it.text)
+class ParseResultProvider(Provider[ParseResults]):
+
+    @override
+    def execute(self, state: RequestState) -> ParseResults:
+        logger = logging.getLogger("ingr_api").getChild("ParseResProvider")
+        parsed_ingr = state.get(ParsedIngredient)
+        pstate = state.get(ParserState)
+        units = state.get(UnitAggregateResult).res
+        models:list[AmountModel] = []
+        for ix, amnt in enumerate(pstate.nonempty_amounts):
+            # get all units for this nonempty amount
+            unit_candidates = [k for k in units if k.parsed_from.filter(lambda i:i == ix).is_some()]
+            if len(unit_candidates) == 0:
+                logger.warning(f"No unit candidates for amount {amnt}")
+                continue
+            else:
+                logger.debug(f"Found {len(unit_candidates)} units for {amnt}")
+            unit_models = [
+                UnitModel(
+                    name=it.unit_name or "",
+                    comments=it.comments,
+                    source=it.source,
+                    relevance=it.relevance(),
+                    gram_weight=it.gram_weight,
+                ) for it in unit_candidates
+            ]
+            models.append(AmountModel(
+                confidence=amnt.confidence,
+                outer_amount=pstate.outer_amount.unwrap_or(1.0),
+                unit_parsed=amnt.unit,
+                quantity=amnt.quantity,
+                resolved_units=unit_models
             ))
-            def_unit = state_msk.get(EmptyUnitResult).res
-            state_msk.invalidate()
-            best_selected_units = [def_unit]
-            best_amount = None
-            best_inner_amount = 1.0
+        if pstate.empty_amount.is_some() or len(pstate.nonempty_amounts) == 0:
+            quantity, confidence = pstate.empty_amount.unwrap_or_union((1.0,None))
+            unit_candidates = [k for k in units if k.parsed_from.is_none_or(lambda k:k<0)]
+            if len(unit_candidates) == 0:
+                logger.warning("No unit candidates for amount empty amount")
+            else:
+                logger.debug(f"Found {len(unit_candidates)} units for empty amount")
+                unit_models = [
+                    UnitModel(
+                        name=it.unit_name or "",
+                        comments=it.comments,
+                        source=it.source,
+                        relevance=it.relevance(),
+                        gram_weight=it.gram_weight,
+                    ) for it in unit_candidates
+                ]
+                models.append(AmountModel(
+                    confidence=confidence,
+                    outer_amount=pstate.outer_amount.unwrap_or(1.0),
+                    quantity=quantity,
+                    unit_parsed=None,
+                    resolved_units=unit_models
+                ))
 
         return ParseResults (
             name=[NameModel(
                 text=it.text,
                 confidence=it.confidence,
                 starting_pos=it.starting_index
-            ) for it in parsed.name],
-            amount=AmountModel(
-                quantity=best_inner_amount,
-                outer_amount=outer_amount,
-                confidence=None if not best_amount else best_amount.confidence,
-                resolved_units=[UnitModel(
-                    name=it.unit_name or "",
-                    comments=it.comments,
-                    source=it.source,
-                    relevance=it.relevance(),
-                    gram_weight=it.gram_weight,
-                    parsed_from=it.parsed_from
-                ) for it in best_selected_units
-                ]
-            )
+            ) for it in parsed_ingr.name],
+            amount=models
         )
 
 class ShortParseResultProvider(Provider[ShortParseResult]):
     @override
     def execute(self, state:RequestState) -> ShortParseResult:
         parse_result = state.get(ParseResults)
-        amnt = parse_result.amount
+        amnt = max(parse_result.amount, key=lambda k:k.confidence or 0.0)
         qtty = amnt.quantity or 1
         assert len(amnt.resolved_units) > 0
         unit = amnt.resolved_units[0]
-        unit_grams = unit.gram_weight
-        total_grams = unit_grams * qtty * amnt.outer_amount
-        ing_results = state.get(SearchResult)
-        ing = ing_results.results[0]
-        nutris = ing.nutris_100g
-        final_nutris = nutris.multiply(total_grams / 100.0)
 
         parse_res = ShortParseResult(
             quantity=qtty,
-            nutris_calculated=final_nutris,
             outer_amount=amnt.outer_amount,
-            nutris_confidence=None if (unit.relevance is None or amnt.confidence is None) else (unit.relevance * ing.score * amnt.confidence),
             resolved_unit=unit
         )
         return parse_res

@@ -12,7 +12,6 @@ from api.models import (
     ParserState,
     PintUnitCandidate,
     S1_UnitNames_Res,
-    S2_UnitDict_Res,
     UnitCandidate,
 )
 from api.state import OptionalProvider, Provider, RequestState
@@ -36,8 +35,8 @@ class PintUnitNamesProvider[T](Provider[S1_UnitNames_Res]):
     def execute(self, state: RequestState) -> S1_UnitNames_Res:
         return S1_UnitNames_Res(res=self.units)
 
-def _candidate(grams:float, unit:pint.Unit, density_confidence:Option[float]) -> PintUnitCandidate:
-    return PintUnitCandidate(
+def _candidate(grams:float, unit:pint.Unit, density_confidence:Option[float], from_ix:int) -> PintUnitCandidate:
+    cand = PintUnitCandidate(
         comments=[],
         entry_id=-1,
         modifier=None,
@@ -46,8 +45,11 @@ def _candidate(grams:float, unit:pint.Unit, density_confidence:Option[float]) ->
         singular_name=f"{unit}",
         unit_name=f"{unit}",
         density_confidence=density_confidence.unwrap_or_union(None),
-        source="pint"
+        source="pint",
     )
+    #TODO: add parsed_from to constructors
+    cand.parsed_from=Option.some(from_ix)
+    return cand
 
 class PintUnitProvider(OptionalProvider[UnitCandidate]):
 
@@ -62,21 +64,21 @@ class PintUnitProvider(OptionalProvider[UnitCandidate]):
     def execute(self, state:RequestState) -> Option[UnitCandidate]:
         logger = logging.getLogger("ingr_api").getChild("pint_provider")
         pstate = state.get(ParserState)
-        if len(pstate.unit) == 0:
+        if len(pstate.nonempty_amounts) == 0:
             logger.debug("No unit parsed, returning empty")
             return Option.none()
         ureg = state.get(pint.UnitRegistry[Any])
         ctx = pint.Context()
         for it in PINT_EXCLUDE:
             ctx.redefine(f"{it} = nan g")
-        units_parsed_w = [Result.catch(pint.UndefinedUnitError, lambda: ureg.parse_units(unit, case_sensitive=False)) for unit in pstate.unit]
+        units_parsed_w = [Result.catch(pint.UndefinedUnitError, lambda ix=ix,amnt=amnt: (ix, ureg.parse_units(amnt.unit, case_sensitive=False))) for ix,amnt in enumerate(pstate.nonempty_amounts)]
         units_parsed = [k.unwrap() for k in units_parsed_w if k.is_ok()]
         if len(units_parsed) == 0:
             logger.debug("No units are pint compatible.")
             return Option.none()
         logger.debug(f"Found {len(units_parsed)} pint units")
-        units_gram_compat:list[pint.Unit] = [u for u in units_parsed if u.is_compatible_with("g", ctx)]
-        for unit in units_gram_compat:
+        units_gram_compat:list[tuple[int, pint.Unit]] = [u for u in units_parsed if u[1].is_compatible_with("g", ctx)]
+        for from_ix,unit in units_gram_compat:
             pint_amnt = 1 * unit
             grams = float(pint_amnt.to("g").m)
             logger.debug(f"Attempting {unit} (gram compatible:{grams} g )")
@@ -84,7 +86,7 @@ class PintUnitProvider(OptionalProvider[UnitCandidate]):
                 logger.debug("Unit was excluded")
                 continue
             logger.debug(f"Good unit: {unit}")
-            return Option.some(_candidate(grams, unit, density_confidence=Option.some(1.0)))
+            return Option.some(_candidate(grams, unit, density_confidence=Option.some(1.0), from_ix=from_ix))
         density_w = state.get_optional(Density)
         if density_w.is_none():
             logger.debug("No gram-compatible units found and Density was None")
@@ -94,7 +96,7 @@ class PintUnitProvider(OptionalProvider[UnitCandidate]):
         ctx.add_transformation("[volume]", "[mass]", lambda ureg, value, **kwargs: value * density.density * (ureg("g")/ureg("ml")))
         ctx.add_transformation("[length] ** 3", "[mass]", lambda ureg, value, **kwargs: value * density.density * (ureg("g")/ureg("ml")))
         density_confidence = density.confidence
-        for unit_parsed in [k for k in units_parsed if k not in units_gram_compat]:
+        for from_ix,unit_parsed in [k for k in units_parsed if k not in units_gram_compat]:
             logger.debug(f"Attempting {unit_parsed} (not gram compatible)")
             pint_amnt = 1 * unit_parsed
             if pint_amnt.is_compatible_with("ml"):
@@ -104,6 +106,6 @@ class PintUnitProvider(OptionalProvider[UnitCandidate]):
                     logger.debug("Unit was excluded")
                     continue
                 logger.debug(f"Adding unit candidate. Density confidence: {density.confidence}")
-                return Option.some(_candidate(grams, unit_parsed, Option.some_if(density_confidence)))
+                return Option.some(_candidate(grams, unit_parsed, Option.some_if(density_confidence), from_ix=from_ix))
         logger.debug("Reporting no unit present.")
         return Option.none()

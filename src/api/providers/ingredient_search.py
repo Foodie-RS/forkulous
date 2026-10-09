@@ -21,9 +21,11 @@ class IngredientSearchProvider(Provider[SearchResult]):
     def execute(self, state:RequestState) -> SearchResult:
         logger = logging.getLogger("ingr_api").getChild("IngrSrchProv")
         params:SearchParams = state.get(SearchRequest).search_params
-        results:list[IngredientCandidate] = []
+        # use at least all ingredients that are available anyway
+        results:list[IngredientCandidate] = state.get_all(IngredientCandidate, only_use_available=True)
         for ingr in state.iter(IngredientCandidate):
-            results.append(ingr)
+            if ingr not in results:
+                results.append(ingr)
             if params.fast and ingr.score > GOOD_INGREDIENT_CUTOFF:
                 break
         results.sort(key=lambda it: it.score, reverse=True)

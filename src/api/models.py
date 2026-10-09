@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import abc
 import json
-from dataclasses import dataclass
-from typing import Any, NamedTuple, Self, override
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple, override
 
 from pydantic import BaseModel
 
 from api.common import Option
+
 
 class IngredientModel(BaseModel):
     id:str|int|None
@@ -26,24 +27,22 @@ class UnitModel(BaseModel):
     source:str
     relevance:float|None
     gram_weight:float
-    parsed_from:str|None
 
 class AmountModel(BaseModel):
     quantity:float|None
     confidence:float|None
     outer_amount:float
+    unit_parsed:str|None
     resolved_units:list[UnitModel]
 
 class ParseResults(BaseModel):
     name:list[NameModel]
-    amount:AmountModel
+    amount:list[AmountModel]
 
 class ShortParseResult(BaseModel):
     quantity: float|None
     resolved_unit:UnitModel
     outer_amount:float
-    nutris_calculated:Nutris
-    nutris_confidence:float|None
 
 class SearchParams(BaseModel):
     max_results_be:int=150
@@ -133,29 +132,25 @@ class NutriSearchResult:
     result:Nutris
 
 @dataclass
-class S5_SelectUnits_Res:
+class UnitAggregateResult:
     res:list[UnitCandidate]
-
-@dataclass
-class S6_SemanticPrep_Res:
-    res:list[UnitCandidate]
-@dataclass
-class TransientUnitSelectionResult:
-    res:list[UnitCandidate]
-@dataclass
-class S4_DictFilter_Res:
-    res:list[tuple[UnitCandidate, float]]
 
 @dataclass
 class EmptyUnitResult:
     res:UnitCandidate
     confidence:float
 
+@dataclass
+class NonemptyAmount:
+    quantity:float
+    unit:str
+    confidence:float
 
 @dataclass
 class ParserState:
-    quantity:float
-    unit:list[str]
+    outer_amount:Option[float]
+    nonempty_amounts: list[NonemptyAmount]
+    empty_amount:Option[tuple[float, float]]
     parsed_name:Option[str]
     prep:Option[str]
 
@@ -172,7 +167,7 @@ class UnitCandidate(metaclass=abc.ABCMeta):
     source:str
     score_modifier:float = 1.0
     score_override:float|None=None
-    parsed_from:str|None=None
+    parsed_from:Option[int]=field(default_factory=lambda: Option.none())
 
     def relevance(self) -> float:
         if self.score_override is not None:
@@ -192,14 +187,6 @@ class UnitCandidate(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def clone(self) -> UnitCandidate:
         pass
-
-@dataclass
-class S2_UnitDict_Res:
-   res : dict[str,list[UnitCandidate]]
-
-@dataclass
-class S3_AggrDict_Res:
-    res: dict[str, list[UnitCandidate]]
 
 @dataclass
 class S1_UnitNames_Res:

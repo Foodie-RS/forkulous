@@ -1,13 +1,12 @@
 import logging
-import math
 from collections.abc import Generator
 from dataclasses import dataclass
-from typing import Any, cast, override
+from typing import Any, override
 
 import numpy as np
-from pandas.io.common import is_bool
-from sentence_transformers import CrossEncoder, SentenceTransformer
+from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import semantic_search
+from torch._functorch.vmap import in_dims_t
 
 from api.common import Option
 from api.models import (
@@ -15,6 +14,7 @@ from api.models import (
     FallbackUnitCandidate,
     IngredientCandidate,
     IngredientUnitCandidate,
+    NonemptyAmount,
     ParserState,
     S1_UnitNames_Res,
     UnitCandidate,
@@ -22,9 +22,8 @@ from api.models import (
 from api.providers.fdc_ingredient import LocalFDCIngredientProvider
 from api.state import GeneratorProvider, OptionalProvider, Provider, RequestState
 
-SERVING_MEASURE_UNITS = [1036,1049,1059,1069,1071,1096]
-ITEM_MEASURE_UNITS = list(range(1013,1030)) + list(range(1031, 1038)) + list(range(1039,1049)) + list(range(1050,1059)) + [1060] + list(range(1063,1069)) + [1070] + list(range(1072,1121))
-ITEM_NAMES=["fruit", "piece", ""]
+ITEM_NAMES={"fruit", "whole","medium","regular", "serving"}
+SKIP_NAMES={"cup", "ounce", "oz", "fl oz"}
 MIN_UNIT_RESULTS=3
 UNIT_INGR_CUTOFF=0.5
 MAX_INGREDIENT_PULL_COUNT=10
@@ -96,11 +95,12 @@ class FDCUnitProvider(GeneratorProvider[UnitCandidate]):
         #TODO add case for fast=False
         rejects:list[IngredientUnitCandidate] = []
         pstate = state.get(ParserState)
-        logger.debug(f"FDCUnitsProvider called for units {pstate.unit}")
-        if len(pstate.unit)==0:
+        unit_names = [amnt.unit for amnt in pstate.nonempty_amounts]
+        logger.debug(f"FDCUnitsProvider called for units {unit_names}")
+        if len(unit_names)==0:
             logger.warning("ParserState.unit was empty, but FDCUnitProvider was called!")
             return
-        unit_lower = {p.lower() for p in pstate.unit}
+        unit_set = {p for p in unit_names}
         ingr_pull_count = 0
         for ingr in state.iter(IngredientCandidate, from_provider=LocalFDCIngredientProvider):
             if ingr.score <= UNIT_INGR_CUTOFF:
@@ -113,15 +113,17 @@ class FDCUnitProvider(GeneratorProvider[UnitCandidate]):
             for unit_parsed in self.unit_corpus[ingr.id]:
                 unit_cand = _unit(unit_parsed, ingr)
                 names = [k.lower() for k in [unit_cand.singular_name, unit_cand.plural_name, unit_cand.unit_name] if k is not None]
-                if len(unit_lower.intersection(names)) > 0:
+                intersect = unit_set.intersection(names)
+                if len(intersect) > 0:
                     logger.debug(f"Suitable unit found: {unit_cand.unit_name}, yielding")
+                    cand_ix,_ = max((k for k in enumerate(pstate.nonempty_amounts) if k[1].unit in intersect), key=lambda it:it[1].confidence)
+                    unit_cand.parsed_from=Option.some(cand_ix)
                     yield unit_cand
                 else:
                     rejects.append(unit_cand)
             if ingr_pull_count >= MAX_INGREDIENT_PULL_COUNT:
                 break
-        unit_queries = list(unit_lower)
-        embd_query = self.unit_ranker.encode(unit_queries, convert_to_tensor=True)
+        embd_query = self.unit_ranker.encode(unit_names, convert_to_tensor=True)
         docs:dict[str, UnitCandidate] = {}
         for it in rejects:
             #TODO maybe consider respecting comments as well? Although this might not be so important as these are already rejects
@@ -138,14 +140,14 @@ class FDCUnitProvider(GeneratorProvider[UnitCandidate]):
         #TODO Create index over docs? They are static data
         embd_docs = self.unit_ranker.encode([(k.unit_name or k.singular_name or k.plural_name) for k in docs_list], convert_to_tensor=True)
         results = semantic_search(embd_query, embd_docs, top_k=10)
-        results_match:list[tuple[str, float, UnitCandidate]] = [(unit_queries[ix], it["score"], docs_list[it["corpus_id"]]) for ix, outer in enumerate(results) for it in outer]
+        results_match:list[tuple[int, float, UnitCandidate]] = [(ix, it["score"], docs_list[it["corpus_id"]]) for ix, outer in enumerate(results) for it in outer]
         results_match.sort(key=lambda k:k[1], reverse=True)
         for parsed, score, candidate in results_match:
             # candidates can appear more than once
             candidate = candidate.clone()
             # penalty for low semantic similarity
             candidate.score_modifier = 0.5 + (0.5 * score)
-            candidate.parsed_from=parsed
+            candidate.parsed_from=Option.some(parsed)
             if candidate.relevance() > UNIT_INGR_CUTOFF:
                 logger.debug(f"Yielding semantic-searched unit {candidate.unit_name} (BE score: {score}, new total score {candidate})...")
                 yield candidate
@@ -176,19 +178,33 @@ def _get_default(crps:_CorpusType, state:RequestState) -> Option[UnitCandidate]:
             units = list(crps[str(candidate.id)])
             if len(units) == 0:
                 continue
+            rem:list[int] = []
+            for ix,unit in enumerate(units):
+                if unit["unit_name"] in ITEM_NAMES:
+                    logger.debug(f"Returning {unit['unit_name']} because it has an item-like name")
+                    return Option.some(_unit(unit, candidate))
+                elif unit["unit_name"] in SKIP_NAMES:
+                    logger.debug(f"Removing {unit['unit_name']} because it has a household measurement-like name")
+                    rem.append(ix)
+            rem.reverse()
+            for r in rem:
+                _=units.pop(r)
             units.sort(key=lambda it:it["seq_num"])
             unit = units[0]
             logger.debug(f"Returning {unit['unit_name']} because it has the lowest seq_num")
             return Option.some(_unit(unit, candidate))
     pstate = state.get(ParserState)
-    if len(pstate.unit) > 0:
+    if len(pstate.nonempty_amounts) > 0:
         logger.debug("Unit not empty, not looking up serving to avoid infinite recursion")
         return Option.none()
     logger.debug("No units, looking up `serving`")
     pstate_mod = ParserState(
         parsed_name=pstate.parsed_name,
-        unit=["serving"],
-        quantity=pstate.quantity,
+        nonempty_amounts=[NonemptyAmount(
+            confidence=1.0, quantity=1.0,unit="serving"
+        )],
+        empty_amount=Option.none(),
+        outer_amount=Option.none(),
         prep=pstate.prep
     )
     state_msk = state.mask()
@@ -259,16 +275,18 @@ class FDCFbUnitProv(OptionalProvider[FallbackUnitCandidate]):
     def execute(self, state:RequestState) -> Option[FallbackUnitCandidate]:
         logger = logging.getLogger("ingr_api").getChild("FDCFbProv")
         pstate = state.get(ParserState)
-        if len(pstate.unit) == 0:
+        if len(pstate.nonempty_amounts) == 0:
             logger.debug("Can't provide fallback unit because unit is empty")
             return Option.none()
-        for unit in pstate.unit:
+        for ix,amnt in enumerate(pstate.nonempty_amounts):
+            unit =amnt.unit
             if unit in self.name_eq:
                 res = Option.some_if(self.units.get(self.name_eq[unit]))
             else:
                 res = Option.some_if(self.units.get(unit))
             if res.is_some():
                 logger.debug(f"Found fallback for {unit} in database")
+                res = res.map(lambda k:k.clone()).inspect(lambda k,ix=ix: k.parsed_from.set(ix))
                 return res
             else:
                 logger.debug(f"No fallback found for {unit}")

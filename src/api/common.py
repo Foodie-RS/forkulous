@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Any, cast
+
 
 @dataclass
 class Option[T]:
@@ -23,6 +24,13 @@ class Option[T]:
     @staticmethod
     def none[K]() -> Option[K]:
         return Option(None, _some=False)
+
+    @staticmethod
+    def from_union[T1, T2, O](left_type:type[T1], val:T1|T2, map_fn_1:Callable[[T1], O], map_fn_2:Callable[[T2], O]) -> Option[O]:
+        if isinstance(val, left_type):
+            return Option.some(map_fn_1(val))
+        else:
+            return Option.some(map_fn_2(cast(T2, val)))
 
     def unwrap(self) -> T:
         if self._value is None or not self._some:
@@ -59,6 +67,38 @@ class Option[T]:
         else:
             return Option.none()
 
+    def replace(self, new_val:T) -> Option[T]:
+        if self.is_some():
+            self._value=new_val
+        return self
+
+    def set(self, new_val:T) -> Option[T]:
+        self._value=new_val
+        self._some = True
+        return self
+
+    def inspect(self, inspect_fn:Callable[[T], Any]) -> Option[T]:
+        if self.is_some():
+            inspect_fn(self.unwrap())
+        return self
+
+    def and_then[O](self, map_fn: Callable[[T], Option[O]]) -> Option[O]:
+        if self.is_some():
+            return map_fn(self.unwrap())
+        else:
+            return Option.none()
+
+    def and_then_union[O](self, map_fn: Callable[[T], O|None]) -> Option[O]:
+        if self.is_some():
+            return Option.some_if(map_fn(self.unwrap()))
+        else:
+            return Option.none()
+
+    def filter(self, predicate:Callable[[T], bool]) -> Option[T]:
+        if self.is_some() and predicate(self.unwrap()):
+            return self
+        return Option.none()
+
     def get_or(self, other: Option[T]) -> Option[T]:
         if self.is_some():
             return self
@@ -93,7 +133,7 @@ class Result[T, E:Exception]:
     @staticmethod
     def catch[K, X:Exception](catch_what:type[X], lmda: Callable[[], K]) -> Result[K, X]:
         try:
-            res = lmda()
+            res:K = lmda()
             return Result.ok(res)
         except catch_what as e:
             return Result.err(e)
@@ -110,6 +150,12 @@ class Result[T, E:Exception]:
 
     def union(self) -> T|E:
         return self._value
+
+    def ok_or_none(self) -> Option[T]:
+        if self.is_ok():
+            return Option.some(cast(T, self._value))
+        else:
+            return Option.none()
 
     def is_ok(self) -> bool:
         return not self._err

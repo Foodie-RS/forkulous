@@ -1,18 +1,16 @@
 import logging
-from dataclasses import dataclass
-from itertools import chain
 from typing import override
 
 from sentence_transformers import SentenceTransformer
 
-from api.common import Option
 from api.models import (
+    EmptyUnitResult,
     FallbackUnitCandidate,
     ParserState,
-    S5_SelectUnits_Res,
+    UnitAggregateResult,
     UnitCandidate,
 )
-from api.state import OptionalProvider, RequestState
+from api.state import Provider, RequestState
 
 PREPARATION_RELEVANCE_FACTOR=0.1
 UNIT_EPSILON = 0.02
@@ -73,19 +71,32 @@ def _rerank_prep(topk:list[UnitCandidate], unit_ranker:SentenceTransformer, stat
         topk.sort(key=lambda k: k.relevance(), reverse=True)
         return True
 
-class S5_SelectUnits_Prov(OptionalProvider[S5_SelectUnits_Res]):
+class S5_SelectUnits_Prov(Provider[UnitAggregateResult]):
     unit_ranker:SentenceTransformer
     @override
-    def execute(self, state:RequestState) -> Option[S5_SelectUnits_Res]:
-        #TODO: merge this provider with SemanticPrepSearchProvider?
+    def execute(self, state:RequestState) -> UnitAggregateResult:
         logger = logging.getLogger("ingr_api").getChild("UnitSel")
+        pstate = state.get(ParserState)
         logger.debug("Aggregating units")
         candidates:list[UnitCandidate] = []
-        for cand in state.iter(UnitCandidate, round_robin=True):
-            candidates.append(cand)
-            if len(candidates) >= UNIT_FAST_LIMIT or cand.relevance() >= UNIT_EARLY_ACCEPT_LIMIT:
-                # stop early if we get a good unit
-                break
+        if len(pstate.nonempty_amounts) > 0:
+            for unit_cand in state.iter(UnitCandidate):
+                _=unit_cand.parsed_from.expect("parsed_from was None on non-empty unit!")
+                candidates.append(unit_cand)
+                if len(candidates) >= UNIT_FAST_LIMIT or unit_cand.relevance() >= UNIT_EARLY_ACCEPT_LIMIT:
+                    break
+            if (len(candidates) == 0 or (max(k.relevance() for k in candidates) < UNIT_RELEVANCE_CUTOFF)):
+                logger.warning("Calling fallback providers because no suitable unit was found")
+                un = state.get(FallbackUnitCandidate)
+                candidates.append(un)
+
+        empty_candidates:list[UnitCandidate] = []
+        if pstate.empty_amount.is_some() or len(pstate.nonempty_amounts) == 0:
+            for res in state.iter(EmptyUnitResult):
+                empty_candidates.append(res.res)
+                if len(empty_candidates) >= UNIT_FAST_LIMIT or res.res.relevance() >= UNIT_EARLY_ACCEPT_LIMIT:
+                    break
+        candidates = candidates + empty_candidates
 
         logger.debug(f"Initial unit count: {len(candidates)} units")
 
@@ -106,29 +117,14 @@ class S5_SelectUnits_Prov(OptionalProvider[S5_SelectUnits_Res]):
             _=candidates.pop(it)
         logger.debug(f"Count after deduplication: {len(candidates)}")
 
-        parse_state = state.get(ParserState)
-
         candidates.sort(key=lambda it:it.relevance(), reverse=True)
+
         # preparation as tiebreaker
         topk:list[UnitCandidate] = candidates[:max(len(candidates),10)]
-        if len(topk) > 1 and parse_state.prep.is_some() and ((topk[0].relevance() - topk[1].relevance()) < UNIT_EPSILON):
+        if len(topk) > 1 and pstate.prep.is_some() and ((topk[0].relevance() - topk[1].relevance()) < UNIT_EPSILON):
             logger.debug("Ranking by preparation because multiple units qualify")
             _=_rerank_prep(state=state, topk=topk, unit_ranker=self.unit_ranker)
 
-        #fallback
-        if (len(topk) == 0 or topk[0].relevance() < UNIT_RELEVANCE_CUTOFF):
-            logger.warning("Calling fallback providers because no suitable unit was found")
-            un = state.get(FallbackUnitCandidate)
-            rel = un.relevance()
-            added = False
-            for ix, cand in enumerate(topk):
-                if cand.relevance() < rel:
-                    topk.insert(ix, un)
-                    added = True
-                    break
-            if not added:
-                topk.append(un)
-
         logger.debug("Final unit count: %s", len(topk))
 
-        return Option.some(S5_SelectUnits_Res(res=topk))
+        return UnitAggregateResult(res=topk)

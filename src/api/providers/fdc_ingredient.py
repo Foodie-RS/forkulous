@@ -1,28 +1,24 @@
 from __future__ import annotations
-import math
 
-from collections.abc import Generator
 import logging
+import math
+from collections.abc import Generator
 from dataclasses import dataclass
 from typing import cast, override
 
 import numpy as np
-from mpmath import sigmoid
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from usearch.index import Index
 
 from api.common import Option
 from api.models import (
     IngredientCandidate,
-    NutriSearchParam,
     Nutris,
+    NutriSearchParam,
     NutriSearchResult,
-    ProviderSearchResult,
     SearchRequest,
 )
-from api.state import GeneratorProvider, OptionalProvider, Provider, RequestState
-
-FDCCandidates = dict[str, IngredientCandidate]
+from api.state import GeneratorProvider, OptionalProvider, RequestState
 
 FDC_CE_Q_PROMPT="query: "
 FDC_CE_D_PROMPT="document: "

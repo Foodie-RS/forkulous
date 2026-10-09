@@ -15,7 +15,6 @@ from ingredient_parser.dataclasses import (
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from usearch.index import Index
 
-from api.common import Option
 from api.models import (
     EmptyUnitResult,
     FallbackUnitCandidate,
@@ -23,18 +22,14 @@ from api.models import (
     Nutris,
     NutriSearchResult,
     ParseResults,
-    ProviderSearchResult,
+    ParserState,
     S1_UnitNames_Res,
-    S2_UnitDict_Res,
-    S3_AggrDict_Res,
-    S4_DictFilter_Res,
-    S5_SelectUnits_Res,
-    S6_SemanticPrep_Res,
     SearchParams,
     SearchRequest,
     SearchResponse,
     SearchResult,
     ShortParseResult,
+    UnitAggregateResult,
     UnitCandidate,
 )
 from api.providers.density import Density, FallbackDensityProvider, UnitDensityProvider
@@ -54,6 +49,7 @@ from api.providers.ingredient_search import (
 from api.providers.parsing import (
     ParseResultProvider,
     ParserProvider,
+    ParserStateProvider,
     ShortParseResultProvider,
 )
 from api.providers.pint_unit import (
@@ -92,10 +88,11 @@ class SearchAPI:
         self.def_search_params = def_search_params
         state = RootState()
         state.add_provider(ParsedIngredient, ParserProvider(_type=ParsedIngredient))
+        state.add_provider(ParserState, ParserStateProvider(_type=ParserState))
         state.add_provider(ParseResults, ParseResultProvider(_type=ParseResults))
         state.add_provider(ShortParseResult, ShortParseResultProvider(_type=ShortParseResult))
         state.add_provider(SearchResult, IngredientSearchProvider(_type=SearchResult))
-        state.add_provider(S5_SelectUnits_Res, S5_SelectUnits_Prov(_type=Option[S5_SelectUnits_Res]))
+        state.add_provider(UnitAggregateResult, S5_SelectUnits_Prov(_type=UnitAggregateResult))
         for cls, prov in providers.items():
             if isinstance(prov, list):
                 for inner_prov in prov:
@@ -114,16 +111,21 @@ class SearchAPI:
         state = root_state.new_request()
         state.set(pint.UnitRegistry[Any], UREG)
         state.set(SearchRequest, req)
-        ingr_search_res = state.get(SearchResult)
-        response = SearchResponse(
-            query=req.query,
-            parse_result=None,
-            search_results=ingr_search_res.results
-        )
         if req.search_params.parse:
             parse_res = state.get(ShortParseResult)
-            response.parse_result = parse_res
-        return response
+            ingr_search_res = state.get(SearchResult)
+            return SearchResponse(
+                query=req.query,
+                parse_result=parse_res,
+                search_results=ingr_search_res.results
+            )
+        else:
+            res = state.get(SearchResult)
+            return SearchResponse(
+                query=req.query,
+                parse_result=None,
+                search_results=res.results
+            )
 
 
 def _gen_index(corpus:dict[int,str], model:SentenceTransformer) -> Index:
